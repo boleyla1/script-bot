@@ -35,13 +35,14 @@ def print_error(message):
 def print_warning(message):
     print(f"{Colors.YELLOW}⚠️  {message}{Colors.END}")
 
-def test_mysql_connection(host, user, password):
-    """تست اتصال به MySQL"""
+def test_mysql_connection(host, user, password, port=3306):
     try:
-        connection = mysql.connector.connect(host=host, user=user, password=password)
-        if connection.is_connected():
-            connection.close()
-            return True
+        connection = mysql.connector.connect(
+            host=host,
+            user=user,
+            password=password,
+            port=port
+        )
     except Error:
         return False
     return False
