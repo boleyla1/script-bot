@@ -19,14 +19,6 @@ import string
 import hashlib
 import time
 import io
-from flask import Flask, request
-import time
-
-
-
-# ==================== Flask & LocalTunnel ====================
-from flask import Flask, request
-from telegram import Update
 from telegram.ext import Application
 
 
