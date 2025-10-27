@@ -39,6 +39,31 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
+#!/bin/bash
+set -e  # اگر خطایی رخ داد اسکریپت متوقف شود
+
+# مسیر فعلی
+CURRENT_DIR=$(pwd)
+
+# بررسی اینکه پوشه پروژه وجود داشته باشه یا نه
+if [ ! -f "bot.py" ] || [ ! -f "setup_bot.py" ] || [ ! -f "requirements.txt" ]; then
+    echo "⏳ فایل‌های پروژه یافت نشد. در حال دانلود از گیت..."
+    
+    # پوشه موقت برای کلون کردن
+    TMP_DIR=$(mktemp -d)
+    
+    git clone https://github.com/boleyla1/script-bot.git "$TMP_DIR/script-bot"
+    
+    # کپی همه فایل‌ها به پوشه فعلی
+    cp -r "$TMP_DIR/script-bot/"* "$CURRENT_DIR/"
+    
+    # پاک کردن پوشه موقت
+    rm -rf "$TMP_DIR"
+    
+    echo "✅ فایل‌های پروژه دانلود شدند."
+fi
+
+
 # مرحله 1: به‌روزرسانی سیستم
 print_step 1 "به‌روزرسانی سیستم"
 apt update -qq && apt upgrade -y -qq
