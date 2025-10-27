@@ -5,7 +5,6 @@ from telegram.ext import (
     ContextTypes, MessageHandler, filters, ConversationHandler
 )
 import re
-from flask import Flask, request
 import aiohttp
 from datetime import datetime, timedelta
 import mysql.connector
@@ -19,8 +18,9 @@ import string
 import hashlib
 import time
 import io
-from telegram.ext import Application
-
+import os
+from dotenv import load_dotenv
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 
 
 
@@ -30,133 +30,31 @@ from telegram.ext import Application
 
 
 # ==================== تنظیمات اصلی ====================
-TELEGRAM_TOKEN = "8164728857:AAHAe-7FumKf2tqK9_WS3fJUainqEFPY9L8"
-MARZBAN_URL = "https://m1.boleyla.com:8000"
-MARZBAN_USERNAME = "Hambo"
-MARZBAN_PASSWORD = "hambo12"
-ADMIN_IDS = [7812363183]
+load_dotenv()
 
-# تنظیمات MySQL
+# تنظیمات از .env
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+MARZBAN_URL = os.getenv('MARZBAN_URL')
+MARZBAN_USERNAME = os.getenv('MARZBAN_USERNAME')
+MARZBAN_PASSWORD = os.getenv('MARZBAN_PASSWORD')
+ADMIN_IDS = [int(x) for x in os.getenv('ADMIN_IDS', '').split(',') if x]
+
 MYSQL_CONFIG = {
-    'host': 'localhost',
-    'user': 'Hambo',
-    'password': 'hambo12',
-    'database': 'vpn_bot_db',
+    'host': os.getenv('MYSQL_HOST', 'localhost'),
+    'user': os.getenv('MYSQL_USER'),
+    'password': os.getenv('MYSQL_PASSWORD'),
+    'database': os.getenv('MYSQL_DATABASE'),
     'charset': 'utf8mb4',
     'collation': 'utf8mb4_unicode_ci'
 }
 
-app = Flask(__name__)
-application = None
+ZARINPAL_MERCHANT = os.getenv('ZARINPAL_MERCHANT')
+ZARINPAL_CALLBACK_URL = os.getenv('ZARINPAL_CALLBACK_URL', 'https://bot.boleyla.com/zarinpal/callback')
 
-@app.route(f"/vpn/bot/webhook/{TELEGRAM_TOKEN}", methods=["POST"])
-async def setup_bot():
-    global application
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-    
-    # Add handlers...
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(button_handler))
-    
-    # Set webhook
-    await application.bot.set_webhook(
-        url=f"https://boleyla.ir/vpn/bot/webhook/{TELEGRAM_TOKEN}"
-    )
 
-@app.route(f'/webhook/{TELEGRAM_TOKEN}', methods=['POST'])
-async def webhook():
-    """دریافت آپدیت‌ها از تلگرام"""
-    update = Update.de_json(request.get_json(), application.bot)
-    await application.process_update(update)
-    return 'ok'
-
-@app.route('/zarinpal/verify')
-def zarinpal_callback():
-    """✅ Webhook برای دریافت callback از زرین‌پال"""
-    authority = request.args.get('Authority')
-    status = request.args.get('Status')
-    
-    logger.info(f"📥 Callback دریافت شد: Authority={authority}, Status={status}")
-    
-    if not authority:
-        return "Authority not found", 400
-    
-    if status != 'OK':
-        # پرداخت لغو شده
-        payment = get_payment_by_authority(authority)
-        if payment:
-            update_payment_status(authority, 'cancelled')
-        
-        return """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <title>پرداخت لغو شد</title>
-        </head>
-        <body style="text-align:center;font-family:Tahoma;padding:50px;">
-            <h2>❌ پرداخت لغو شد</h2>
-            <p>به ربات تلگرام خود برگردید.</p>
-            <script>
-                setTimeout(function() {
-                    window.close();
-                }, 3000);
-            </script>
-        </body>
-        </html>
-        """, 200
-    
-    # ✅ ایجاد event loop برای async
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
-    try:
-        # ✅ اجرای تایید به صورت async
-        result = loop.run_until_complete(verify_payment_async(authority))
-        
-        if result:
-            return """
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="utf-8">
-                <title>پرداخت موفق</title>
-            </head>
-            <body style="text-align:center;font-family:Tahoma;padding:50px;">
-                <h2>✅ پرداخت شما با موفقیت انجام شد!</h2>
-                <p>به ربات تلگرام خود برگردید.</p>
-                <script>
-                    setTimeout(function() {
-                        window.close();
-                    }, 3000);
-                </script>
-            </body>
-            </html>
-            """, 200
-        else:
-            return """
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="utf-8">
-                <title>خطا در تایید</title>
-            </head>
-            <body style="text-align:center;font-family:Tahoma;padding:50px;">
-                <h2>❌ خطا در تایید پرداخت</h2>
-                <p>لطفاً با پشتیبانی تماس بگیرید.</p>
-            </body>
-            </html>
-            """, 500
-    finally:
-        loop.close()
-
-def run_flask():
-    """اجرای Flask در thread جداگانه"""
-    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
     
 # تنظیمات زرین‌پال
-ZARINPAL_MERCHANT = "9f22ca55-acd7-4b10-89f1-de1ea03d6e04"
-ZARINPAL_SANDBOX = True
+
 
 (WAITING_BALANCE_USER, WAITING_BALANCE_AMOUNT, WAITING_BALANCE_REASON,
  WAITING_BROADCAST_MESSAGE, WAITING_USER_SEARCH, WAITING_WALLET_CHARGE_AMOUNT,
@@ -5666,11 +5564,28 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== MAIN ====================
 
 def main():
+    """راه‌اندازی ربات"""
     
+    # ایجاد Application
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
     
-    # ✅ راه‌اندازی دیتابیس
-    init_db()
+    # اضافه کردن handlers
+    application.add_handler(CommandHandler("start", start))
+    # application.add_handler(CommandHandler("admin", admin_command))
+    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     
+    # تنظیم webhook (اختیاری - اگر می‌خواهید از polling استفاده کنید این را حذف کنید)
+    # application.run_webhook(
+    #     listen="127.0.0.1",
+    #     port=8443,
+    #     url_path=TELEGRAM_TOKEN,
+    #     webhook_url=f"https://bot.boleyla.com/{TELEGRAM_TOKEN}"
+    # )
+    
+    # استفاده از polling (ساده‌تر - توصیه می‌شود)
+    logger.info("✅ ربات با polling راه‌اندازی شد!")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     main()
