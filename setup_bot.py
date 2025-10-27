@@ -6,8 +6,6 @@ import sys
 import getpass
 import mysql.connector
 from mysql.connector import Error
-import secrets
-import string
 
 class Colors:
     GREEN = '\033[92m'
@@ -40,11 +38,7 @@ def print_warning(message):
 def test_mysql_connection(host, user, password):
     """تست اتصال به MySQL"""
     try:
-        connection = mysql.connector.connect(
-            host=host,
-            user=user,
-            password=password
-        )
+        connection = mysql.connector.connect(host=host, user=user, password=password)
         if connection.is_connected():
             connection.close()
             return True
@@ -55,31 +49,9 @@ def test_mysql_connection(host, user, password):
 def create_database(host, user, password, db_name):
     """ایجاد دیتابیس MySQL"""
     try:
-        connection = mysql.connector.connect(
-            host=host,
-            user=user,
-            password=password
-        )
+        connection = mysql.connector.connect(host=host, user=user, password=password)
         cursor = connection.cursor()
-        
-        # بررسی وجود دیتابیس
-        cursor.execute("SHOW DATABASES")
-        databases = [db[0] for db in cursor.fetchall()]
-        
-        if db_name in databases:
-            print_warning(f"دیتابیس {db_name} از قبل وجود دارد.")
-            overwrite = input(f"{Colors.YELLOW}آیا می‌خواهید آن را پاک کرده و دوباره بسازید؟ [y/N]: {Colors.END}").strip().lower()
-            if overwrite == 'y':
-                cursor.execute(f"DROP DATABASE {db_name}")
-                print_success(f"دیتابیس قدیمی حذف شد.")
-            else:
-                cursor.close()
-                connection.close()
-                return True
-        
-        # ایجاد دیتابیس جدید
         cursor.execute(f"CREATE DATABASE {db_name} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
-        
         cursor.close()
         connection.close()
         return True
@@ -193,7 +165,6 @@ ZARINPAL_SANDBOX={config['zarinpal_sandbox']}
 # Admin User IDs (comma separated)
 ADMIN_IDS={config['admin_ids']}
 """
-    
     try:
         with open('.env', 'w', encoding='utf-8') as f:
             f.write(env_content)
@@ -201,6 +172,40 @@ ADMIN_IDS={config['admin_ids']}
     except Exception as e:
         print_error(f"خطا در ایجاد فایل .env: {e}")
         return False
+
+def select_or_create_database(host, user, password):
+    """انتخاب دیتابیس موجود یا ایجاد دیتابیس جدید"""
+    try:
+        connection = mysql.connector.connect(host=host, user=user, password=password)
+        cursor = connection.cursor()
+        cursor.execute("SHOW DATABASES")
+        databases = [db[0] for db in cursor.fetchall()]
+        cursor.close()
+        connection.close()
+        
+        print(f"\n{Colors.BOLD}📂 دیتابیس‌های موجود:{Colors.END}")
+        for idx, db in enumerate(databases, 1):
+            print(f"  {idx}. {db}")
+        print(f"  {len(databases)+1}. ساخت دیتابیس جدید")
+        
+        choice = input(f"{Colors.CYAN}انتخاب کنید [1-{len(databases)+1}]: {Colors.END}").strip()
+        
+        if choice.isdigit():
+            choice = int(choice)
+            if 1 <= choice <= len(databases):
+                selected_db = databases[choice-1]
+                print_success(f"دیتابیس انتخاب شد: {selected_db}")
+                return selected_db, False  # دیتابیس جدید ساخته نشده
+            elif choice == len(databases)+1:
+                new_db = input(f"{Colors.CYAN}نام دیتابیس جدید: {Colors.END}").strip()
+                if create_database(host, user, password, new_db):
+                    print_success(f"دیتابیس {new_db} ایجاد شد!")
+                    return new_db, True  # دیتابیس جدید ساخته شده
+        print_error("انتخاب نامعتبر!")
+        sys.exit(1)
+    except Error as e:
+        print_error(f"خطا در دریافت دیتابیس‌ها: {e}")
+        sys.exit(1)
 
 def get_user_input():
     """دریافت اطلاعات از کاربر"""
@@ -229,7 +234,10 @@ def get_user_input():
         sys.exit(1)
     print_success("اتصال به MySQL موفقیت‌آمیز بود!")
     
-    config['mysql_database'] = input(f"{Colors.CYAN}💾 نام دیتابیس [vpn_bot_db]: {Colors.END}").strip() or 'vpn_bot_db'
+    # انتخاب یا ایجاد دیتابیس
+    db_name, is_new = select_or_create_database(config['mysql_host'], config['mysql_user'], config['mysql_password'])
+    config['mysql_database'] = db_name
+    config['is_new_db'] = is_new
     
     print(f"\n{Colors.BOLD}{'='*60}{Colors.END}\n")
     
@@ -253,31 +261,19 @@ def main():
     try:
         print_header()
         
-        # دریافت اطلاعات
         config = get_user_input()
         
-        print(f"\n{Colors.BOLD}{'='*60}{Colors.END}\n")
-        print_step(5, "ایجاد دیتابیس و جداول")
+        # اگر دیتابیس جدید ساخته شد، جداول را ایجاد کن
+        if config['is_new_db']:
+            print_step(5, "ایجاد جداول دیتابیس")
+            print(f"{Colors.YELLOW}⏳ در حال ایجاد جداول...{Colors.END}")
+            if create_tables(config['mysql_host'], config['mysql_user'], 
+                            config['mysql_password'], config['mysql_database']):
+                print_success("جداول با موفقیت ایجاد شدند!")
+            else:
+                sys.exit(1)
         
-        # ایجاد دیتابیس
-        print(f"{Colors.YELLOW}⏳ در حال ایجاد دیتابیس {config['mysql_database']}...{Colors.END}")
-        if create_database(config['mysql_host'], config['mysql_user'], 
-                          config['mysql_password'], config['mysql_database']):
-            print_success(f"دیتابیس {config['mysql_database']} با موفقیت ایجاد شد!")
-        else:
-            sys.exit(1)
-        
-        # ایجاد جداول
-        print(f"{Colors.YELLOW}⏳ در حال ایجاد جداول...{Colors.END}")
-        if create_tables(config['mysql_host'], config['mysql_user'], 
-                        config['mysql_password'], config['mysql_database']):
-            print_success("جداول با موفقیت ایجاد شدند!")
-        else:
-            sys.exit(1)
-        
-        print(f"\n{Colors.BOLD}{'='*60}{Colors.END}\n")
         print_step(6, "ایجاد فایل .env")
-        
         if create_env_file(config):
             print_success("فایل .env با موفقیت ایجاد شد!")
         else:
