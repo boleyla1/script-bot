@@ -21,8 +21,9 @@ import io
 import os
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-
-
+import time
+from telegram.ext import Defaults
+from telegram.request import HTTPXRequest
 
 
 
@@ -5577,7 +5578,7 @@ def main():
     
     # تنظیم webhook (اختیاری - اگر می‌خواهید از polling استفاده کنید این را حذف کنید)
     # application.run_webhook(
-    #     listen="127.0.0.1",
+    #     listen="0.0.0.0",
     #     port=8443,
     #     url_path=TELEGRAM_TOKEN,
     #     webhook_url=f"https://bot.boleyla.com/{TELEGRAM_TOKEN}"
@@ -5585,7 +5586,7 @@ def main():
     
     # استفاده از polling (ساده‌تر - توصیه می‌شود)
     logger.info("✅ ربات با polling راه‌اندازی شد!")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     main()
