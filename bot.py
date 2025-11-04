@@ -5564,30 +5564,21 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== MAIN ====================
 
-def main():
+async def main():
     """راه‌اندازی ربات"""
-    
-    # ایجاد Application
+
     application = Application.builder().token(TELEGRAM_TOKEN).build()
-    
-    # اضافه کردن handlers
+
+    # اضافه کردن هندلرها
     application.add_handler(CommandHandler("start", start))
-    # application.add_handler(CommandHandler("admin", admin_command))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-    
-    # تنظیم webhook (اختیاری - اگر می‌خواهید از polling استفاده کنید این را حذف کنید)
-    # application.run_webhook(
-    #     listen="0.0.0.0",
-    #     port=8443,
-    #     url_path=TELEGRAM_TOKEN,
-    #     webhook_url=f"https://bot.boleyla.com/{TELEGRAM_TOKEN}"
-    # )
-    
-    # استفاده از polling (ساده‌تر - توصیه می‌شود)
+
     logger.info("✅ ربات با polling راه‌اندازی شد!")
-    # application.run_polling(allowed_updates=Update.ALL_TYPES)
+    await application.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        close_loop=False  # حلقه asyncio را باز نگه می‌دارد
+    )
 
-if __name__ == '__main__':
-    main()
-
+if __name__ == "__main__":
+    asyncio.run(main())
