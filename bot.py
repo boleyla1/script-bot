@@ -49,7 +49,11 @@ MYSQL_CONFIG = {
 }
 
 ZARINPAL_MERCHANT = os.getenv('ZARINPAL_MERCHANT')
-ZARINPAL_CALLBACK_URL = os.getenv('ZARINPAL_CALLBACK_URL', 'https://bot.boleyla.com/zarinpal/callback')
+
+# خط ~30-40 (بخش تنظیمات)
+BOT_USERNAME = "your_bot_username"  # بدون @
+ZARINPAL_CALLBACK_URL = f"https://t.me/{BOT_USERNAME}?start=verify_"
+
 
 
     
@@ -611,6 +615,9 @@ marzban = MarzbanAPI(
     password=MARZBAN_PASSWORD
 )
 
+
+
+
 # ==================== Database Functions ====================
 
 def get_user(user_id: int) -> Optional[Dict]:
@@ -1015,6 +1022,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     invited_reward = 0
     inviter_reward = 0
 
+    if context.args and context.args[0].startswith('verify_'):
+        authority = context.args[0].replace('verify_', '')
+        await verify_payment_handler(update, context, authority)
+        return
     # بررسی لینک رفرال
     if context.args and len(context.args) > 0:
         referral_code = context.args[0]
@@ -2192,48 +2203,48 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(f"❓ دکمه ناشناخته: {data}")
         # ==================== ADMIN TOP REFERRERS ====================
     elif data == "admin_top_referrers":
-            conn = db.get_connection()
-            cursor = conn.cursor(dictionary=True)
-    
-    # برترین دعوت‌کنندگان
-            cursor.execute("""
-        SELECT 
-            u.user_id,
-            u.first_name,
-            u.username,
-            COUNT(r.user_id) as referral_count,
-            u.total_purchased
-        FROM users u
-        LEFT JOIN users r ON r.referred_by = u.user_id
-        GROUP BY u.user_id
-        HAVING referral_count > 0
-        ORDER BY referral_count DESC
-        LIMIT 20
-    """)
-    
-            top_referrers = cursor.fetchall()
-            cursor.close()
-            conn.close()
-    
-            if not top_referrers:
-                text = "📊 هنوز هیچ دعوتی ثبت نشده است."
-            else:
-                text = "🏆 <b>برترین دعوت‌کنندگان</b>\n\n"
-        
+        conn = db.get_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT 
+                u.user_id,
+                u.first_name,
+                u.username,
+                COUNT(r.user_id) AS referral_count,
+                u.total_purchased
+            FROM users u
+            LEFT JOIN users r ON r.referred_by = u.user_id
+            GROUP BY u.user_id
+            HAVING referral_count > 0
+            ORDER BY referral_count DESC
+            LIMIT 10
+        """)
+
+        top_referrers = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        if not top_referrers:
+            text = "📊 هنوز هیچ دعوتی ثبت نشده است."
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_referral")]]
+        else:
+            text = "🏆 <b>برترین دعوت‌کنندگان</b>\n\n"
             inviter_reward = int(get_setting('referral_inviter_reward', '10000'))
-        
-            for idx, ref in enumerate(top_referrers[:10], 1):
+
+            for idx, ref in enumerate(top_referrers, 1):
                 medal = "🥇" if idx == 1 else "🥈" if idx == 2 else "🥉" if idx == 3 else f"{idx}️⃣"
                 username_text = f"@{ref['username']}" if ref['username'] else "بدون نام کاربری"
-            
+
                 text += f"{medal} <b>{ref['first_name']}</b> ({username_text})\n"
                 text += f"   👥 دعوت‌ها: {ref['referral_count']} نفر\n"
                 text += f"   💰 درآمد رفرال: {format_price(ref['referral_count'] * inviter_reward)}\n"
                 text += f"   💳 کل خرید: {format_price(ref['total_purchased'] or 0)}\n\n"
-    
-                keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_referral")]]
-    
-            await safe_edit_message(query, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_referral")]]
+
+        await safe_edit_message(query, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
 
 # ==================== ADMIN SET INVITER REWARD ====================
     elif data == "admin_set_inviter_reward":
@@ -2669,7 +2680,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         result = zp.request_payment(
             amount=amount,
             description=f"شارژ کیف پول",
-            callback_url=f"{NGROK_URL}/verify",  # ✅ تغییر این خط
+
             mobile=db_user.get('phone')
         )
     
@@ -5561,32 +5572,29 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید.")
 
 
+
 # ==================== MAIN ====================
 
-def main():
+async def main():
     """راه‌اندازی ربات"""
-    
+
     # ایجاد Application
     application = Application.builder().token(TELEGRAM_TOKEN).build()
-    
+
     # اضافه کردن handlers
     application.add_handler(CommandHandler("start", start))
     # application.add_handler(CommandHandler("admin", admin_command))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-    
-    # تنظیم webhook (اختیاری - اگر می‌خواهید از polling استفاده کنید این را حذف کنید)
-    # application.run_webhook(
-    #     listen="127.0.0.1",
-    #     port=8443,
-    #     url_path=TELEGRAM_TOKEN,
-    #     webhook_url=f"https://bot.boleyla.com/{TELEGRAM_TOKEN}"
-    # )
-    
-    # استفاده از polling (ساده‌تر - توصیه می‌شود)
+
+    # اگر در ایران هستی، بهتره از Proxy استفاده کنی 👇
+    # application = Application.builder().token(TELEGRAM_TOKEN).proxy_url("socks5h://127.0.0.1:9050").build()
+
     logger.info("✅ ربات با polling راه‌اندازی شد!")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    await application.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        close_loop=False  # مهم برای ماندگاری loop در systemd
+    )
 
 if __name__ == '__main__':
-    main()
-
+    asyncio.run(main())
