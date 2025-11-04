@@ -21,8 +21,9 @@ import io
 import os
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-
-
+import time
+from telegram.ext import Defaults
+from telegram.request import HTTPXRequest
 
 
 
@@ -5578,19 +5579,26 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def main():
     """راه‌اندازی ربات"""
 
+
     # ایجاد Application
     application = Application.builder().token(TELEGRAM_TOKEN).build()
 
+    # اضافه کردن هندلرها
+
     # اضافه کردن handlers
     application.add_handler(CommandHandler("start", start))
-    # application.add_handler(CommandHandler("admin", admin_command))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+
 
     # اگر در ایران هستی، بهتره از Proxy استفاده کنی 👇
     # application = Application.builder().token(TELEGRAM_TOKEN).proxy_url("socks5h://127.0.0.1:9050").build()
 
     logger.info("✅ ربات با polling راه‌اندازی شد!")
+    await application.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        close_loop=False  # حلقه asyncio را باز نگه می‌دارد
+    )
     await application.run_polling(
         allowed_updates=Update.ALL_TYPES,
         close_loop=False  # مهم برای ماندگاری loop در systemd
