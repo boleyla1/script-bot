@@ -1297,7 +1297,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             amount=pkg['price'],
             description=f"خرید پکیج {pkg['name']}",
             mobile=db_user.get('phone'),
-            callback_url="http://bot.boleyla.com:8080/zarinpal/callback"  # ✅ این خط را اضافه کنید
+            callback_url="http://bot.boleyla.com/zarinpal/callback"
+  # ✅ این خط را اضافه کنید
     )
 
         if result.get('data', {}).get('code') == 100:
@@ -2561,7 +2562,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             amount=amount,
             description=f"شارژ کیف پول",
             mobile=db_user.get('phone'),
-            callback_url="http://bot.boleyla.com:8080/zarinpal/callback"  # ✅ این خط را اضافه کنید
+            callback_url="callback_url="http://bot.boleyla.com/zarinpal/callback""  # ✅ این خط را اضافه کنید
         )
     
         if result.get('data', {}).get('code') == 100:
@@ -5643,16 +5644,17 @@ async def start_webserver():
     runner = web.AppRunner(app)
     await runner.setup()
     
-    site = web.TCPSite(runner, '0.0.0.0', 8080)
+    site = web.TCPSite(runner, '0.0.0.0', 8081)
     await site.start()
     
-    logger.info("🌐 وب‌سرور callback روی پورت 8080 راه‌اندازی شد")
+    logger.info("🌐 وب‌سرور callback روی پورت 8081 راه‌اندازی شد")
 
 
 # ==================== MAIN ====================
 
-def main():
-    global application  # ✅ اضافه شد
+async def main():
+    """✅ Run Bot + Web Server"""
+    global application
     
     try:
         init_db()
@@ -5660,7 +5662,7 @@ def main():
     except Exception as e:
         logger.error(f"❌ خطا در init_db: {e}")
         return
-    
+
     try:
         request = HTTPXRequest(
             connection_pool_size=20,
@@ -5669,30 +5671,36 @@ def main():
             write_timeout=30.0,
             pool_timeout=30.0
         )
-        
+
         application = Application.builder()\
             .token(TELEGRAM_TOKEN)\
             .request(request)\
             .build()
-        
+
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CallbackQueryHandler(button_handler))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-        
-        logger.info("🚀 ربات در حال راه‌اندازی...")
-        asyncio.get_event_loop().create_task(start_webserver())
-        application.run_polling(
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True,
-            close_loop=False
-        )
-        
-    except KeyboardInterrupt:
-        logger.info("⏹ ربات توسط کاربر متوقف شد")
-    except Exception as e:
-        logger.error(f"❌ خطای critical در main: {e}", exc_info=True)
-        raise
 
-if __name__ == "__main__":
-    main()
+        logger.info("✅ ربات راه‌اندازی شد")
+
+        # شروع وب‌سرور
+        asyncio.create_task(start_webserver())
+        
+        # شروع ربات
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling()
+        
+        logger.info("✅ Bot + Web Server running...")
+        
+        # نگه‌داشتن
+        await asyncio.Event().wait()
+
+    except Exception as e:
+        logger.error(f"❌ خطای اجرا: {e}")
+
+
+if __name__ == '__main__':
+    asyncio.run(main())
+
 
