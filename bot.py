@@ -2562,7 +2562,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             amount=amount,
             description=f"شارژ کیف پول",
             mobile=db_user.get('phone'),
-            callback_url="callback_url="http://bot.boleyla.com/zarinpal/callback""  # ✅ این خط را اضافه کنید
+            callback_url="http://bot.boleyla.com/zarinpal/callback"  # ✅ این خط را اضافه کنید
         )
     
         if result.get('data', {}).get('code') == 100:
@@ -5554,7 +5554,7 @@ async def process_successful_payment(authority):
         merchant_id = get_setting('zarinpal_merchant', ZARINPAL_MERCHANT)
         zp = ZarinPal(merchant_id, ZARINPAL_SANDBOX)
         
-        logger.info(f"🔍 Verifying with ZarinPal...")
+        logger.info("🔍 Verifying with ZarinPal...")
         verify_result = zp.verify_payment(authority, payment['amount'])
         logger.info(f"📝 Verify result: {verify_result}")
         
@@ -5562,16 +5562,20 @@ async def process_successful_payment(authority):
             ref_id = verify_result['data']['ref_id']
             logger.info(f"✅ Payment verified! RefID: {ref_id}")
             
-            # بروزرسانی وضعیت
+            # بروزرسانی وضعیت دیتابیس
             update_payment_status(authority, 'success', ref_id)
             
-            # پردازش بر اساس نوع
+            # ✅ انتخاب مسیر بر اساس نوع پرداخت
             if payment['payment_type'] == 'package':
-                logger.info(f"📦 Processing package purchase...")
-                await send_service_activation_message(payment, ref_id)
+                logger.info("📦 Processing package purchase...")
+                await send_service_activation_message(payment['user_id'], payment, ref_id)
+
             elif payment['payment_type'] == 'wallet':
-                logger.info(f"💰 Processing wallet charge...")
-                await send_wallet_charge_message(payment, ref_id)
+                logger.info("💰 Processing wallet charge...")
+                await send_wallet_charge_message(payment['user_id'], payment, ref_id)
+            
+            else:
+                logger.warning(f"⚠️ Unknown payment type: {payment['payment_type']}")
         
         else:
             error_code = verify_result.get('data', {}).get('code')
@@ -5581,6 +5585,7 @@ async def process_successful_payment(authority):
     except Exception as e:
         logger.error(f"❌ Error in process_successful_payment: {e}")
         logger.exception(e)
+
 
 
 
