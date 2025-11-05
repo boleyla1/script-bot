@@ -24,6 +24,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 import time
 from telegram.ext import Defaults
 from telegram.request import HTTPXRequest
+from aiohttp import web
+
 
 
 
@@ -52,8 +54,9 @@ MYSQL_CONFIG = {
 ZARINPAL_MERCHANT = os.getenv('ZARINPAL_MERCHANT')
 
 # خط ~30-40 (بخش تنظیمات)
-BOT_USERNAME = "your_bot_username"  # بدون @
-ZARINPAL_CALLBACK_URL = f"https://t.me/{BOT_USERNAME}?start=verify_"
+
+ZARINPAL_SANDBOX = os.getenv('ZARINPAL_SANDBOX', 'True').lower() == 'true'  # ✅ اضافه شد
+BOT_USERNAME = os.getenv('BOT_USERNAME', 'Testvpnmehrbot')  # ✅ یکی حذف شد
 
 
 
@@ -79,7 +82,7 @@ ZARINPAL_CALLBACK_URL = f"https://t.me/{BOT_USERNAME}?start=verify_"
 
 # پکیج‌ها (قابل مدیریت از پنل ادمین)
 PACKAGES = {
-    "1month_30gb": {"name": "1 ماهه 30 گیگ", "duration": 30, "traffic": 32212254720, "price": 50000, "active": True},
+    "1month_30gb": {"name": "1 ماهه 30 گیگ", "duration": 30, "traffic": 32212254720, "price": 10000, "active": True},
     "1month_60gb": {"name": "1 ماهه 60 گیگ", "duration": 30, "traffic": 64424509440, "price": 90000, "active": True},
     "2month_100gb": {"name": "2 ماهه 100 گیگ", "duration": 60, "traffic": 107374182400, "price": 150000, "active": True},
     "3month_120gb": {"name": "3 ماهه 120 گیگ", "duration": 90, "traffic": 128849018880, "price": 250000, "active": True},
@@ -317,13 +320,20 @@ class ZarinPal:
         self.VERIFY_URL = self.base_url + "verify.json"
         self.STARTPAY_URL_TEMPLATE = "https://sandbox.zarinpal.com/pg/StartPay/{authority}" if sandbox else "https://www.zarinpal.com/pg/StartPay/{authority}"
 
-    def request_payment(self, amount: int, description: str, callback_url: str, mobile: str = None, email: str = None) -> dict:
+    def request_payment(self, amount: int, description: str, mobile: str = None, email: str = None, callback_url: str = None) -> dict:
+        """✅ درخواست پرداخت با پشتیبانی callback_url"""
+        
+        # ✅ اگر callback داده نشده، از URL ساختگی استفاده می‌کنیم
+        if not callback_url:
+            callback_url = "https://bot.boleyla.com.com/callback"
+        
         data = {
             "merchant_id": self.merchant_id,
             "amount": amount,
             "description": description,
-            "callback_url": callback_url
+            "callback_url": callback_url  # ✅ اضافه شد
         }
+        
         if mobile:
             data["mobile"] = mobile
         if email:
@@ -337,6 +347,7 @@ class ZarinPal:
             return {"data": {"code": -1}}
 
     def verify_payment(self, authority: str, amount: int) -> dict:
+        """تایید پرداخت"""
         data = {
             "merchant_id": self.merchant_id,
             "amount": amount,
@@ -350,6 +361,7 @@ class ZarinPal:
             return {"data": {"code": -1}}
 
     def get_payment_url(self, authority: str) -> str:
+        """لینک پرداخت"""
         return self.STARTPAY_URL_TEMPLATE.format(authority=authority)
 
 # ==================== Marzban API ====================
@@ -1025,7 +1037,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if context.args and context.args[0].startswith('verify_'):
         authority = context.args[0].replace('verify_', '')
-        await verify_payment_handler(update, context, authority)
+    # فقط به کاربر بگویید روی دکمه "تایید پرداخت" کلیک کند
+        await update.message.reply_text(
+            "⚠️ لطفاً روی دکمه «✅ تایید پرداخت» در پیام قبلی کلیک کنید."
+        )
         return
     # بررسی لینک رفرال
     if context.args and len(context.args) > 0:
@@ -1131,257 +1146,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
-# ZARINPALL
-async def verify_payment_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """تایید پرداخت زرین‌پال"""
-    user_id = update.effective_user.id
-    
-    # دریافت authority از دستور
-    command_parts = update.message.text.split('_')
-    
-    if len(command_parts) < 2:
-        await update.message.reply_text(
-            "❌ فرمت دستور اشتباه است!\n\n"
-            "فرمت صحیح: /verify_AUTHORITY"
-        )
-        return
-    
-    authority = command_parts[1]
-    
-    # دریافت اطلاعات پرداخت از دیتابیس
-    payment = get_payment_by_authority(authority)
-    
-    if not payment:
-        await update.message.reply_text("❌ اطلاعات پرداخت یافت نشد!")
-        return
-    
-    if payment['status'] == 'success':
-        await update.message.reply_text("✅ این پرداخت قبلاً تایید شده است.")
-        return
-    
-    if payment['user_id'] != user_id:
-        await update.message.reply_text("❌ این پرداخت متعلق به شما نیست!")
-        return
-    
-    await update.message.reply_text("⏳ در حال تایید پرداخت...")
-    
-    # تایید پرداخت با زرین‌پال
-    merchant_id = get_setting('zarinpal_merchant', ZARINPAL_MERCHANT)
-    zp = ZarinPal(merchant_id, ZARINPAL_SANDBOX)
-    
-    verify_result = zp.verify_payment(authority, payment['amount'])
-    
-    if verify_result.get('data', {}).get('code') == 100:
-        ref_id = verify_result['data']['ref_id']
-        
-        # بروزرسانی وضعیت پرداخت
-        update_payment_status(authority, 'success', ref_id)
-        
-        # پردازش بر اساس نوع پرداخت
-        if payment['payment_type'] == 'package':
-            # خرید پکیج
-            pkg_id = payment['package_id']
-            pkg = PACKAGES.get(pkg_id)
-            
-            if pkg:
-                # ساخت سرویس در Marzban
-                marzban_username = generate_username(user_id, update.effective_user.username, update.effective_user.first_name)
-                result = await marzban.create_user(marzban_username, pkg['traffic'], pkg['duration'])
-                
-                if result:
-                    expire_date = datetime.now() + timedelta(days=pkg['duration'])
-                    create_order(user_id, pkg_id, marzban_username, pkg['price'], expire_date, result['subscription_url'])
-                    
-                    text = f"✅ <b>پرداخت موفق!</b>\n\n"
-                    text += f"📦 پکیج: {pkg['name']}\n"
-                    text += f"💰 مبلغ: {format_price(pkg['price'])}\n"
-                    text += f"🔢 کد پیگیری: <code>{ref_id}</code>\n\n"
-                    text += f"👤 نام کاربری: <code>{marzban_username}</code>\n"
-                    text += f"📊 حجم: {format_bytes(pkg['traffic'])}\n"
-                    text += f"📅 تاریخ انقضا: {format_date(expire_date)}\n\n"
-                    text += f"🔗 لینک اتصال:\n<code>{result['subscription_url']}</code>\n\n"
-                    text += "✅ سرویس شما فعال شد!"
-                    
-                    keyboard = [[InlineKeyboardButton("🏠 بازگشت به منو", callback_data="back_to_main")]]
-                    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
-                    
-                    log_admin_action(0, 'purchase_online', user_id, f"خرید {pkg['name']} با زرین‌پال")
-                else:
-                    await update.message.reply_text(
-                        "❌ خطا در ساخت سرویس!\n\n"
-                        "پرداخت شما موفق بود اما در ساخت سرویس مشکلی پیش آمد.\n"
-                        "لطفاً با پشتیبانی تماس بگیرید.\n\n"
-                        f"🔢 کد پیگیری: <code>{ref_id}</code>",
-                        parse_mode='HTML'
-                    )
-            else:
-                await update.message.reply_text("❌ پکیج یافت نشد!")
-        
-        elif payment['payment_type'] == 'wallet':
-            # شارژ کیف پول
-            update_user_balance(user_id, payment['amount'], f"شارژ آنلاین - کد پیگیری: {ref_id}")
-            
-            text = f"✅ <b>شارژ موفق!</b>\n\n"
-            text += f"💰 مبلغ: {format_price(payment['amount'])}\n"
-            text += f"🔢 کد پیگیری: <code>{ref_id}</code>\n\n"
-            text += f"💵 موجودی جدید: {format_price(get_user(user_id)['balance'])}"
-            
-            await update.message.reply_text(text, parse_mode='HTML')
-            
-            log_admin_action(0, 'wallet_charge_online', user_id, f"شارژ {format_price(payment['amount'])} با زرین‌پال")
-    
-    elif verify_result.get('data', {}).get('code') == 101:
-        await update.message.reply_text(
-            "✅ پرداخت شما قبلاً تایید شده است.\n\n"
-            "اگر سرویس دریافت نکرده‌اید با پشتیبانی تماس بگیرید."
-        )
-    else:
-        error_code = verify_result.get('data', {}).get('code', 'نامشخص')
-        update_payment_status(authority, 'failed')
-        
-        await update.message.reply_text(
-            f"❌ پرداخت ناموفق بود!\n\n"
-            f"کد خطا: {error_code}\n\n"
-            f"لطفاً مجدداً تلاش کنید یا با پشتیبانی تماس بگیرید."
-        )
 
-async def verify_payment_async(authority):
-    """✅ تایید پرداخت به صورت async"""
-    try:
-        # دریافت اطلاعات پرداخت
-        payment = get_payment_by_authority(authority)
-        
-        if not payment:
-            logger.error(f"❌ Payment not found: {authority}")
-            return False
-        
-        if payment['status'] == 'success':
-            logger.info(f"✅ Payment already verified: {authority}")
-            return True
-        
-        # تایید با زرین‌پال
-        merchant_id = get_setting('zarinpal_merchant', ZARINPAL_MERCHANT)
-        zp = ZarinPal(merchant_id, ZARINPAL_SANDBOX)
-        
-        verify_result = zp.verify_payment(authority, payment['amount'])
-        
-        if verify_result.get('data', {}).get('code') == 100:
-            ref_id = verify_result['data']['ref_id']
-            
-            # بروزرسانی وضعیت
-            update_payment_status(authority, 'success', ref_id)
-            
-            user_id = payment['user_id']
-            
-            # ✅ پردازش بر اساس نوع پرداخت
-            if payment['payment_type'] == 'wallet':
-                # شارژ کیف پول
-                update_user_balance(user_id, payment['amount'], f"شارژ آنلاین - RefID: {ref_id}")
-                
-                # ارسال اطلاعیه
-                if application:
-                    await application.bot.send_message(
-                        chat_id=user_id,
-                        text=f"✅ <b>شارژ موفق!</b>\n\n"
-                             f"💰 مبلغ: {format_price(payment['amount'])}\n"
-                             f"🔢 کد پیگیری: <code>{ref_id}</code>\n\n"
-                             f"💵 موجودی جدید: {format_price(get_user(user_id)['balance'])}",
-                        parse_mode='HTML'
-                    )
-                
-                logger.info(f"✅ Wallet charged: user={user_id}, amount={payment['amount']}")
-                
-            elif payment['payment_type'] == 'package':
-                # خرید پکیج
-                pkg_id = payment['package_id']
-                pkg = PACKAGES.get(pkg_id)
-                
-                if pkg:
-                    db_user = get_user(user_id)
-                    marzban_username = generate_username(
-                        user_id=user_id,
-                        username=db_user.get('username'),
-                        first_name=db_user.get('first_name')
-                    )
-                    
-                    # ساخت سرویس
-                    result = await marzban.create_user(
-                        marzban_username,
-                        pkg['traffic'],
-                        pkg['duration']
-                    )
-                    
-                    if result and 'subscription_url' in result:
-                        expire_date = datetime.now() + timedelta(days=pkg['duration'])
-                        
-                        # ذخیره سفارش
-                        create_order(
-                            user_id,
-                            pkg_id,
-                            marzban_username,
-                            pkg['price'],
-                            expire_date,
-                            result['subscription_url']
-                        )
-                        
-                        # ارسال اطلاعیه
-                        if application:
-                            text = f"✅ <b>خرید موفق!</b>\n\n"
-                            text += f"📦 پکیج: {pkg['name']}\n"
-                            text += f"💰 مبلغ: {format_price(pkg['price'])}\n"
-                            text += f"🔢 کد پیگیری: <code>{ref_id}</code>\n\n"
-                            text += f"👤 نام کاربری: <code>{marzban_username}</code>\n"
-                            text += f"📊 حجم: {format_bytes(pkg['traffic'])}\n"
-                            text += f"📅 انقضا: {format_date(expire_date)}\n\n"
-                            text += f"🔗 لینک اتصال:\n<code>{result['subscription_url']}</code>"
-                            
-                            await application.bot.send_message(
-                                chat_id=user_id,
-                                text=text,
-                                parse_mode='HTML'
-                            )
-                        
-                        logger.info(f"✅ Service created: user={user_id}, pkg={pkg_id}")
-                    else:
-                        # خطا در ساخت سرویس
-                        update_payment_status(authority, 'failed')
-                        
-                        if application:
-                            await application.bot.send_message(
-                                chat_id=user_id,
-                                text=f"❌ خطا در ساخت سرویس!\n\n"
-                                     f"🔢 کد پیگیری: <code>{ref_id}</code>\n\n"
-                                     f"پرداخت موفق بود اما سرویس ساخته نشد.\n"
-                                     f"با پشتیبانی تماس بگیرید.",
-                                parse_mode='HTML'
-                            )
-                        
-                        logger.error(f"❌ Service creation failed: user={user_id}")
-                        return False
-            
-            return True
-        
-        elif verify_result.get('data', {}).get('code') == 101:
-            logger.info(f"✅ Already verified: {authority}")
-            return True
-        else:
-            error_code = verify_result.get('data', {}).get('code', 'نامشخص')
-            update_payment_status(authority, 'failed')
-            
-            logger.error(f"❌ Verification failed: code={error_code}, authority={authority}")
-            
-            if application:
-                await application.bot.send_message(
-                    chat_id=payment['user_id'],
-                    text=f"❌ پرداخت ناموفق!\n\nکد خطا: {error_code}",
-                    parse_mode='HTML'
-                )
-            
-            return False
-    
-    except Exception as e:
-        logger.error(f"❌ Error in verify_payment_async: {e}", exc_info=True)
-        return False
 
 
 
@@ -1389,7 +1154,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data  # ← اینجا data تعریف می‌شود
     user_id = query.from_user.id
-
+    
 
     try:
         await query.answer()
@@ -1522,30 +1287,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ این پکیج غیرفعال است", show_alert=True)
             return
 
-            await query.message.edit_text("⏳ در حال انتقال به درگاه پرداخت...")
+        await query.message.edit_text("⏳ در حال انتقال به درگاه پرداخت...")
 
-    # ✅ چک کردن وجود URL
-        
         merchant_id = get_setting('zarinpal_merchant', ZARINPAL_MERCHANT)
         zp = ZarinPal(merchant_id, ZARINPAL_SANDBOX)
 
-    # ✅ callback URL صحیح
-        callback_url = f"{LOCALTUNNEL_URL}/zarinpal/verify"
-    
-        logger.info(f"📤 Payment request: pkg={pkg_id}, callback={callback_url}")
-
+    # ✅ درخواست پرداخت بدون callback
         result = zp.request_payment(
             amount=pkg['price'],
             description=f"خرید پکیج {pkg['name']}",
-            callback_url=callback_url,
-            mobile=db_user.get('phone')
-        )
+            mobile=db_user.get('phone'),
+            callback_url="http://bot.boleyla.com:8080/zarinpal/callback"  # ✅ این خط را اضافه کنید
+    )
 
         if result.get('data', {}).get('code') == 100:
             authority = result['data']['authority']
             payment_url = zp.get_payment_url(authority)
 
-        # ذخیره اطلاعات
+        # ✅ ذخیره اطلاعات پرداخت
             save_payment(
                 user_id=user_id,
                 amount=pkg['price'],
@@ -1554,11 +1313,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 payment_type='package'
             )
 
+        # ✅ پیام جدید با راهنمای تایید
+           
             text = f"💳 <b>پرداخت آنلاین</b>\n\n"
             text += f"📦 پکیج: {pkg['name']}\n"
             text += f"💰 مبلغ: {format_price(pkg['price'])}\n\n"
-            text += f"🔗 روی دکمه زیر کلیک کنید:\n\n"
-            text += f"✅ پس از پرداخت، به صورت خودکار فعال می‌شود."
+            text += f"🔗 لطفاً روی دکمه زیر کلیک کنید و پرداخت را انجام دهید.\n\n"
+            text += f"✅ بعد از پرداخت، به صفحه نتیجه هدایت می‌شوید و ربات خودکار پیام می‌فرستد."
+
 
             keyboard = [
                 [InlineKeyboardButton("💳 پرداخت", url=payment_url)],
@@ -1580,7 +1342,127 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"❌ خطا در اتصال به درگاه پرداخت!\n\n"
                 f"کد خطا: {error_code}\n\n"
                 f"لطفاً با پشتیبانی تماس بگیرید."
-            )   
+            )  
+
+
+    # در تابع button_handler اضافه کنید:
+
+    elif data.startswith("verify_payment_"):
+        authority = data[15:]  # حذف "verify_payment_"
+    
+        await query.message.edit_text("⏳ در حال بررسی پرداخت...")
+    
+    # دریافت اطلاعات پرداخت
+        payment = get_payment_by_authority(authority)
+    
+        if not payment:
+            await query.message.edit_text("❌ اطلاعات پرداخت یافت نشد!")
+            return
+    
+        if payment['status'] == 'success':
+            await query.message.edit_text(
+                "✅ این پرداخت قبلاً تایید شده است.\n\n"
+                "سرویس شما فعال است."
+            )
+            return
+    
+        if payment['user_id'] != user_id:
+            await query.message.edit_text("❌ این پرداخت متعلق به شما نیست!")
+            return
+    
+    # تایید با زرین‌پال
+        merchant_id = get_setting('zarinpal_merchant', ZARINPAL_MERCHANT)
+        zp = ZarinPal(merchant_id, ZARINPAL_SANDBOX)
+    
+        verify_result = zp.verify_payment(authority, payment['amount'])
+    
+        if verify_result.get('data', {}).get('code') == 100:
+            ref_id = verify_result['data']['ref_id']
+        
+        # بروزرسانی وضعیت
+            update_payment_status(authority, 'success', ref_id)
+        
+        # پردازش بر اساس نوع
+            if payment['payment_type'] == 'package':
+                pkg_id = payment['package_id']
+                pkg = PACKAGES.get(pkg_id)
+            
+                if pkg:
+                # ساخت سرویس
+                    marzban_username = generate_username(user_id, update.effective_user.username, update.effective_user.first_name)
+                    result = await marzban.create_user(marzban_username, pkg['traffic'], pkg['duration'])
+                
+                    if result:
+                        expire_date = datetime.now() + timedelta(days=pkg['duration'])
+                        create_order(user_id, pkg_id, marzban_username, pkg['price'], expire_date, result['subscription_url'])
+                    
+                        text = f"✅ <b>پرداخت موفق!</b>\n\n"
+                        text += f"📦 پکیج: {pkg['name']}\n"
+                        text += f"💰 مبلغ: {format_price(pkg['price'])}\n"
+                        text += f"🔢 کد پیگیری: <code>{ref_id}</code>\n\n"
+                        text += f"👤 نام کاربری: <code>{marzban_username}</code>\n"
+                        text += f"📊 حجم: {format_bytes(pkg['traffic'])}\n"
+                        text += f"📅 تاریخ انقضا: {format_date(expire_date)}\n\n"
+                        text += f"🔗 لینک اتصال:\n<code>{result['subscription_url']}</code>\n\n"
+                        text += "✅ سرویس شما فعال شد!"
+                    
+                        keyboard = [[InlineKeyboardButton("🏠 بازگشت به منو", callback_data="back_to_main")]]
+                        await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+                    
+                        log_admin_action(0, 'purchase_online', user_id, f"خرید {pkg['name']} با زرین‌پال")
+                    else:
+                        await query.message.edit_text(
+                            "❌ خطا در ساخت سرویس!\n\n"
+                            "پرداخت شما موفق بود اما در ساخت سرویس مشکلی پیش آمد.\n"
+                            "لطفاً با پشتیبانی تماس بگیرید.\n\n"
+                            f"🔢 کد پیگیری: <code>{ref_id}</code>",
+                            parse_mode='HTML'
+                        )
+        
+        elif payment['payment_type'] == 'wallet':
+            # شارژ کیف پول
+                update_user_balance(user_id, payment['amount'], f"شارژ آنلاین - کد پیگیری: {ref_id}")
+            
+                text = f"✅ <b>شارژ موفق!</b>\n\n"
+                text += f"💰 مبلغ: {format_price(payment['amount'])}\n"
+                text += f"🔢 کد پیگیری: <code>{ref_id}</code>\n\n"
+                text += f"💵 موجودی جدید: {format_price(get_user(user_id)['balance'])}"
+            
+                await query.message.edit_text(text, parse_mode='HTML')
+            
+                log_admin_action(0, 'wallet_charge_online', user_id, f"شارژ {format_price(payment['amount'])} با زرین‌پال")
+    
+        elif verify_result.get('data', {}).get('code') == 101:
+            await query.message.edit_text(
+                "✅ پرداخت شما قبلاً تایید شده است.\n\n"
+                "اگر سرویس دریافت نکرده‌اید با پشتیبانی تماس بگیرید."
+            )
+        else:
+            error_code = verify_result.get('data', {}).get('code', 'نامشخص')
+            update_payment_status(authority, 'failed')
+        
+            error_messages = {
+                -9: "خطای اعتبارسنجی (Merchant ID یا Authority نامعتبر)",
+                -10: "IP یا Merchant ID نامعتبر",
+                -11: "Merchant ID فعال نیست",
+                -15: "درگاه پرداخت تعلیق شده",
+                -16: "سطح تایید Merchant نامعتبر",
+                -50: "مبلغ کمتر از حد مجاز",
+                -51: "مبلغ بیشتر از حد مجاز",
+                -54: "Authority منقضی شده"
+            }
+        
+            error_msg = error_messages.get(error_code, "خطای نامشخص")
+        
+            await query.message.edit_text(
+                f"❌ پرداخت ناموفق بود!\n\n"
+                f"کد خطا: {error_code}\n"
+                f"توضیح: {error_msg}\n\n"
+                f"لطفاً مجدداً تلاش کنید یا با پشتیبانی تماس بگیرید."
+            )
+
+
+
     # ==================== MY SERVICES ====================
     elif data == "my_services":
         orders = get_user_orders(user_id)
@@ -2672,36 +2554,33 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
         await query.message.edit_text("⏳ در حال انتقال به درگاه پرداخت...")
     
-    # درخواست پرداخت
         merchant_id = get_setting('zarinpal_merchant', ZARINPAL_MERCHANT)
         zp = ZarinPal(merchant_id, ZARINPAL_SANDBOX)
-    
-        bot_username = context.bot.username
     
         result = zp.request_payment(
             amount=amount,
             description=f"شارژ کیف پول",
-
-            mobile=db_user.get('phone')
+            mobile=db_user.get('phone'),
+            callback_url="http://bot.boleyla.com:8080/zarinpal/callback"  # ✅ این خط را اضافه کنید
         )
     
         if result.get('data', {}).get('code') == 100:
             authority = result['data']['authority']
             payment_url = zp.get_payment_url(authority)
         
-        # ذخیره اطلاعات پرداخت
+        # ذخیره
             save_payment(
                 user_id=user_id,
                 amount=amount,
                 authority=authority,
                 package_id=None,
                 payment_type='wallet'
-            )   
+            )
         
             text = f"💳 <b>پرداخت آنلاین</b>\n\n"
             text += f"💰 مبلغ شارژ: {format_price(amount)}\n\n"
-            text += f"🔗 برای پرداخت روی دکمه زیر کلیک کنید:\n\n"
-            text += f"⚠️ پس از پرداخت موفق، دستور /verify_{authority[:20]} را ارسال کنید."
+            text += f"🔗 لطفاً روی دکمه زیر کلیک کنید و پرداخت را انجام دهید.\n\n"
+            text += f"✅ بعد از پرداخت موفق، ربات خودکار پیام خواهد فرستاد."
         
             keyboard = [
                 [InlineKeyboardButton("💳 پرداخت", url=payment_url)],
@@ -2721,8 +2600,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"❌ خطا در اتصال به درگاه پرداخت!\n\n"
                 f"کد خطا: {error_code}\n\n"
                 f"لطفاً با پشتیبانی تماس بگیرید."
-            )
-
+        )   
 
 
 # ==================== ADMIN PANEL FUNCTIONS ====================
@@ -5574,35 +5452,247 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+# ==================== ZARINPAL CALLBACK WEBSERVER ====================
+
+async def zarinpal_callback(request):
+    """✅ دریافت callback از زرین‌پال + لاگ کامل"""
+    
+    # ✅ لاگ تمام پارامترهای دریافتی
+    logger.info("="*50)
+    logger.info("📥 ZARINPAL CALLBACK RECEIVED!")
+    logger.info(f"Full URL: {request.url}")
+    logger.info(f"Query params: {dict(request.query)}")
+    logger.info("="*50)
+    
+    authority = request.query.get('Authority')
+    status = request.query.get('Status')
+
+    logger.info(f"Authority: {authority}")
+    logger.info(f"Status: {status}")
+
+    # مسیر صفحات HTML
+    import os
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    success_path = os.path.join(current_dir, 'templates', 'success.html')
+    failure_path = os.path.join(current_dir, 'templates', 'failure.html')
+
+    if status == 'OK' and authority:
+        logger.info(f"✅ Payment successful! Processing authority: {authority}")
+        
+        # ✅ پردازش async
+        asyncio.create_task(process_successful_payment(authority))
+        
+        # نمایش صفحه موفق
+        try:
+            with open(success_path, 'r', encoding='utf-8') as f:
+                html_content = f.read()
+            logger.info("✅ Success page loaded and sent")
+            return web.Response(text=html_content, content_type='text/html; charset=utf-8')
+        except FileNotFoundError:
+            logger.error(f"❌ Success page not found: {success_path}")
+            html = """
+            <!DOCTYPE html>
+            <html lang="fa" dir="rtl">
+            <head><meta charset="UTF-8"><title>پرداخت موفق</title></head>
+            <body style="font-family:Tahoma;text-align:center;padding:50px;">
+                <h1 style="color:green;">✅ پرداخت موفق!</h1>
+                <p>به ربات تلگرام مراجعه کنید</p>
+            </body>
+            </html>
+            """
+            return web.Response(text=html, content_type='text/html; charset=utf-8')
+    
+    else:
+        logger.warning(f"❌ Payment failed or cancelled. Authority: {authority}, Status: {status}")
+        
+        if authority:
+            update_payment_status(authority, 'failed')
+        
+        # نمایش صفحه ناموفق
+        try:
+            with open(failure_path, 'r', encoding='utf-8') as f:
+                html_content = f.read()
+            logger.info("✅ Failure page loaded and sent")
+            return web.Response(text=html_content, content_type='text/html; charset=utf-8')
+        except FileNotFoundError:
+            logger.error(f"❌ Failure page not found: {failure_path}")
+            html = """
+            <!DOCTYPE html>
+            <html lang="fa" dir="rtl">
+            <head><meta charset="UTF-8"><title>پرداخت ناموفق</title></head>
+            <body style="font-family:Tahoma;text-align:center;padding:50px;">
+                <h1 style="color:red;">❌ پرداخت ناموفق</h1>
+                <p>لطفاً مجدداً تلاش کنید</p>
+            </body>
+            </html>
+            """
+            return web.Response(text=html, content_type='text/html; charset=utf-8')
+
+
+async def process_successful_payment(authority):
+    """✅ پردازش پرداخت موفق + لاگ کامل"""
+    
+    logger.info("="*50)
+    logger.info(f"🔄 Processing payment for authority: {authority}")
+    
+    try:
+        # دریافت اطلاعات پرداخت
+        payment = get_payment_by_authority(authority)
+        
+        if not payment:
+            logger.error(f"❌ Payment not found for authority: {authority}")
+            return
+        
+        logger.info(f"✅ Payment found: {payment}")
+        
+        if payment['status'] == 'success':
+            logger.warning(f"⚠️ Payment already verified: {authority}")
+            return
+        
+        # Verify با زرین‌پال
+        merchant_id = get_setting('zarinpal_merchant', ZARINPAL_MERCHANT)
+        zp = ZarinPal(merchant_id, ZARINPAL_SANDBOX)
+        
+        logger.info(f"🔍 Verifying with ZarinPal...")
+        verify_result = zp.verify_payment(authority, payment['amount'])
+        logger.info(f"📝 Verify result: {verify_result}")
+        
+        if verify_result.get('data', {}).get('code') == 100:
+            ref_id = verify_result['data']['ref_id']
+            logger.info(f"✅ Payment verified! RefID: {ref_id}")
+            
+            # بروزرسانی وضعیت
+            update_payment_status(authority, 'success', ref_id)
+            
+            # پردازش بر اساس نوع
+            if payment['payment_type'] == 'package':
+                logger.info(f"📦 Processing package purchase...")
+                await send_service_activation_message(payment, ref_id)
+            elif payment['payment_type'] == 'wallet':
+                logger.info(f"💰 Processing wallet charge...")
+                await send_wallet_charge_message(payment, ref_id)
+        
+        else:
+            error_code = verify_result.get('data', {}).get('code')
+            logger.error(f"❌ Verification failed! Error code: {error_code}")
+            update_payment_status(authority, 'failed')
+    
+    except Exception as e:
+        logger.error(f"❌ Error in process_successful_payment: {e}")
+        logger.exception(e)
+
+
+
+async def send_service_activation_message(user_id, payment, ref_id):
+    """ارسال پیام فعال‌سازی سرویس"""
+    pkg_id = payment['package_id']
+    pkg = PACKAGES.get(pkg_id)
+    
+    if not pkg:
+        return
+    
+    # ساخت سرویس
+    marzban_username = generate_username(user_id, None, None)
+    result = await marzban.create_user(marzban_username, pkg['traffic'], pkg['duration'])
+    
+    if result:
+        from datetime import datetime, timedelta
+        expire_date = datetime.now() + timedelta(days=pkg['duration'])
+        create_order(user_id, pkg_id, marzban_username, pkg['price'], expire_date, result['subscription_url'])
+        
+        text = f"✅ <b>پرداخت موفق!</b>\n\n"
+        text += f"📦 پکیج: {pkg['name']}\n"
+        text += f"💰 مبلغ: {format_price(pkg['price'])}\n"
+        text += f"🔢 کد پیگیری: <code>{ref_id}</code>\n\n"
+        text += f"👤 نام کاربری: <code>{marzban_username}</code>\n"
+        text += f"📊 حجم: {format_bytes(pkg['traffic'])}\n"
+        text += f"📅 تاریخ انقضا: {format_date(expire_date)}\n\n"
+        text += f"🔗 لینک اتصال:\n<code>{result['subscription_url']}</code>"
+        
+        keyboard = [[InlineKeyboardButton("🏠 بازگشت به منو", callback_data="back_to_main")]]
+        
+        await application.bot.send_message(
+            chat_id=user_id,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='HTML'
+        )
+
+
+async def send_wallet_charge_message(user_id, payment, ref_id):
+    """ارسال پیام شارژ کیف پول"""
+    update_user_balance(user_id, payment['amount'], f"شارژ آنلاین - کد: {ref_id}")
+    
+    text = f"✅ <b>شارژ موفق!</b>\n\n"
+    text += f"💰 مبلغ: {format_price(payment['amount'])}\n"
+    text += f"🔢 کد پیگیری: <code>{ref_id}</code>\n\n"
+    text += f"💵 موجودی جدید: {format_price(get_user(user_id)['balance'])}"
+    
+    await application.bot.send_message(
+        chat_id=user_id,
+        text=text,
+        parse_mode='HTML'
+    )
+
+
+async def start_webserver():
+    """راه‌اندازی وب‌سرور برای callback"""
+    app = web.Application()
+    app.router.add_get('/zarinpal/callback', zarinpal_callback)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    site = web.TCPSite(runner, '0.0.0.0', 8080)
+    await site.start()
+    
+    logger.info("🌐 وب‌سرور callback روی پورت 8080 راه‌اندازی شد")
+
+
 # ==================== MAIN ====================
 
-async def main():
-    """راه‌اندازی ربات"""
+def main():
+    global application  # ✅ اضافه شد
+    
+    try:
+        init_db()
+        logger.info("✅ دیتابیس آماده شد")
+    except Exception as e:
+        logger.error(f"❌ خطا در init_db: {e}")
+        return
+    
+    try:
+        request = HTTPXRequest(
+            connection_pool_size=20,
+            connect_timeout=30.0,
+            read_timeout=30.0,
+            write_timeout=30.0,
+            pool_timeout=30.0
+        )
+        
+        application = Application.builder()\
+            .token(TELEGRAM_TOKEN)\
+            .request(request)\
+            .build()
+        
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CallbackQueryHandler(button_handler))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+        
+        logger.info("🚀 ربات در حال راه‌اندازی...")
+        asyncio.get_event_loop().create_task(start_webserver())
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True,
+            close_loop=False
+        )
+        
+    except KeyboardInterrupt:
+        logger.info("⏹ ربات توسط کاربر متوقف شد")
+    except Exception as e:
+        logger.error(f"❌ خطای critical در main: {e}", exc_info=True)
+        raise
 
+if __name__ == "__main__":
+    main()
 
-    # ایجاد Application
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-
-    # اضافه کردن هندلرها
-
-    # اضافه کردن handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(button_handler))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-
-
-    # اگر در ایران هستی، بهتره از Proxy استفاده کنی 👇
-    # application = Application.builder().token(TELEGRAM_TOKEN).proxy_url("socks5h://127.0.0.1:9050").build()
-
-    logger.info("✅ ربات با polling راه‌اندازی شد!")
-    await application.run_polling(
-        allowed_updates=Update.ALL_TYPES,
-        close_loop=False  # حلقه asyncio را باز نگه می‌دارد
-    )
-    await application.run_polling(
-        allowed_updates=Update.ALL_TYPES,
-        close_loop=False  # مهم برای ماندگاری loop در systemd
-    )
-
-if __name__ == '__main__':
-    asyncio.run(main())

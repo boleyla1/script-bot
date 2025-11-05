@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>پرداخت موفق</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Vazir', 'Tahoma', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            text-align: center;
+            animation: fadeIn 0.5s ease-in;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .icon {
+            font-size: 80px;
+            margin-bottom: 20px;
+            animation: bounce 1s ease-in-out;
+        }
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+        h1 {
+            color: #10b981;
+            font-size: 28px;
+            margin-bottom: 15px;
+        }
+        p {
+            color: #6b7280;
+            font-size: 16px;
+            line-height: 1.8;
+            margin-bottom: 10px;
+        }
+        .info-box {
+            background: #f0fdf4;
+            border: 2px solid #10b981;
+            border-radius: 12px;
+            padding: 20px;
+            margin: 25px 0;
+        }
+        .info-box p {
+            color: #065f46;
+            margin: 8px 0;
+        }
+        .btn {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            padding: 15px 40px;
+            border-radius: 10px;
+            text-decoration: none;
+            font-size: 18px;
+            margin-top: 20px;
+            transition: all 0.3s;
+        }
+        .btn:hover {
+            background: #764ba2;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="icon">✅</div>
+        <h1>پرداخت موفق!</h1>
+        <p>تراکنش شما با موفقیت انجام شد</p>
+        
+        <div class="info-box">
+            <p><strong>✨ سرویس شما آماده است</strong></p>
+            <p>لطفاً به ربات تلگرام مراجعه کنید</p>
+            <p>لینک اتصال برای شما ارسال شده است</p>
+        </div>
+        
+        <p style="font-size: 14px; color: #9ca3af;">
+            📱 برای دریافت لینک به ربات مراجعه کنید
+        </p>
+        
+        <a href="https://t.me/Testvpnmehrbot" class="btn">🤖 بازگشت به ربات</a>
+    </div>
+</body>
+</html>
