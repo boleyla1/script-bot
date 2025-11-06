@@ -1294,7 +1294,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ✅ درخواست پرداخت بدون callback
         result = zp.request_payment(
-            amount=pkg['price'],
+            amount=pkg['price'] * 10,
             description=f"خرید پکیج {pkg['name']}",
             mobile=db_user.get('phone'),
             callback_url="http://bot.boleyla.com/zarinpal/callback"
@@ -2559,7 +2559,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         zp = ZarinPal(merchant_id, ZARINPAL_SANDBOX)
     
         result = zp.request_payment(
-            amount=amount,
+            amount=amount * 10,  # تبدیل تومان به ریال ✅
             description=f"شارژ کیف پول",
             mobile=db_user.get('phone'),
             callback_url="http://bot.boleyla.com/zarinpal/callback"  # ✅ این خط را اضافه کنید
@@ -2572,7 +2572,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ذخیره
             save_payment(
                 user_id=user_id,
-                amount=amount,
+                amount=amount * 10,
                 authority=authority,
                 package_id=None,
                 payment_type='wallet'
@@ -3341,7 +3341,7 @@ async def process_add_traffic(query, order_id, gb_amount, context):
 
 
 async def process_extend_service(query, order_id, days, context):
-    """تمدید سرویس - با متد PATCH"""
+    """تمدید سرویس - نسخه اصلاح شده"""
     conn = db.get_connection()
     cursor = conn.cursor(dictionary=True)
     cursor.execute("SELECT * FROM orders WHERE id = %s", (order_id,))
@@ -3360,7 +3360,7 @@ async def process_extend_service(query, order_id, days, context):
         await query.message.edit_text("❌ نام کاربری مرزبان یافت نشد.")
         return
 
-    # ✅ دریافت اطلاعات فعلی از Marzban
+    # ✅ دریافت اطلاعات کامل از Marzban
     user_data = await marzban.get_user(marzban_username)
     if not user_data:
         cursor.close()
@@ -3370,7 +3370,7 @@ async def process_extend_service(query, order_id, days, context):
 
     # ✅ محاسبه تاریخ انقضای جدید
     current_expire_timestamp = user_data.get('expire', 0)
-    
+
     # تبدیل timestamp
     if current_expire_timestamp:
         if current_expire_timestamp > 10000000000:  # میلی‌ثانیه
@@ -3379,14 +3379,14 @@ async def process_extend_service(query, order_id, days, context):
             current_expire = datetime.fromtimestamp(current_expire_timestamp)
     else:
         current_expire = datetime.now()
-    
+
     # محاسبه تاریخ جدید
     if current_expire < datetime.now():
         new_expire = datetime.now() + timedelta(days=days)
     else:
         new_expire = current_expire + timedelta(days=days)
-    
-    # تبدیل به timestamp ثانیه (نه میلی‌ثانیه)
+
+    # تبدیل به timestamp ثانیه
     new_expire_timestamp = int(new_expire.timestamp())
 
     # ✅ بروزرسانی توکن
@@ -3398,33 +3398,33 @@ async def process_extend_service(query, order_id, days, context):
             "Authorization": f"Bearer {marzban.token}",
             "Content-Type": "application/json"
         }
-        
-        # ✅ استفاده از PATCH به جای PUT (فقط فیلدهای تغییریافته)
-        update_data = {
+
+        # ✅ ایجاد payload کامل با تمام فیلدهای ضروری
+        update_payload = {
+            "proxies": user_data.get('proxies', {}),
+            "inbounds": user_data.get('inbounds', {}),
             "expire": new_expire_timestamp,
+            "data_limit": user_data.get('data_limit', 0),
+            "data_limit_reset_strategy": user_data.get('data_limit_reset_strategy', 'no_reset'),
             "status": "active"
         }
-        
+
         logger.info(f"🔄 تمدید {marzban_username}: expire={new_expire_timestamp}, date={new_expire}")
-        
-        # ارسال با PATCH
+        logger.info(f"📦 Payload: {update_payload}")
+
+        # ✅ ارسال با PUT
         async with aiohttp.ClientSession() as session:
-            async with session.put(  # ✅ بعضی نسخه‌های مرزبان PUT می‌خواهند
+            async with session.put(
                 f"{marzban.url}/api/user/{marzban_username}",
-                json={
-                    "username": marzban_username,
-                    "expire": new_expire_timestamp,
-                    "status": "active",
-                    "data_limit": user_data.get('data_limit'),
-                    "data_limit_reset_strategy": user_data.get('data_limit_reset_strategy', 'no_reset'),
-                    "proxies": user_data.get('proxies', {}),
-                    "inbounds": user_data.get('inbounds', {})
-                },
+                json=update_payload,
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=15)
             ) as resp:
                 response_text = await resp.text()
                 
+                logger.info(f"📡 Response Status: {resp.status}")
+                logger.info(f"📡 Response Body: {response_text}")
+
                 if resp.status == 200:
                     # ✅ موفقیت
                     cursor.execute(
@@ -3447,12 +3447,13 @@ async def process_extend_service(query, order_id, days, context):
                     )
 
                     log_admin_action(
-                        query.from_user.id, 
-                        'extend_service', 
+                        query.from_user.id,
+                        'extend_service',
                         order['user_id'],
                         f"تمدید {days} روزه {marzban_username}"
                     )
 
+                    # ارسال اطلاعیه به کاربر
                     try:
                         await context.bot.send_message(
                             order['user_id'],
@@ -3465,24 +3466,34 @@ async def process_extend_service(query, order_id, days, context):
                         )
                     except Exception as e:
                         logger.error(f"خطا در ارسال اطلاعیه: {e}")
-                        
+
                 else:
                     logger.error(f"❌ خطای Marzban {resp.status}: {response_text}")
                     await query.message.edit_text(
                         f"❌ خطا در تمدید سرویس\n\n"
                         f"کد خطا: {resp.status}\n"
-                        f"پیام: {response_text[:300]}\n\n"
-                        f"لطفاً لاگ سرور مرزبان را بررسی کنید."
+                        f"پیام خطا:\n<code>{response_text[:500]}</code>\n\n"
+                        f"لطفاً لاگ سرور مرزبان را بررسی کنید.",
+                        parse_mode='HTML'
                     )
-    
+
+    except asyncio.TimeoutError:
+        logger.error("❌ Timeout در اتصال به Marzban")
+        await query.message.edit_text(
+            "❌ خطا: زمان اتصال به مرزبان به پایان رسید.\n\n"
+            "لطفاً اتصال به سرور مرزبان را بررسی کنید."
+        )
     except Exception as e:
         logger.error(f"❌ خطا در process_extend_service: {e}", exc_info=True)
         await query.message.edit_text(
-            f"❌ خطا در اتصال به Marzban\n\n{str(e)}"
+            f"❌ خطا در اتصال به Marzban\n\n"
+            f"جزئیات: <code>{str(e)}</code>",
+            parse_mode='HTML'
         )
     finally:
         cursor.close()
         conn.close()
+
 
 
 
@@ -5459,11 +5470,11 @@ async def zarinpal_callback(request):
     """✅ دریافت callback از زرین‌پال + لاگ کامل"""
     
     # ✅ لاگ تمام پارامترهای دریافتی
-    logger.info("="*50)
+    logger.info("=" * 50)
     logger.info("📥 ZARINPAL CALLBACK RECEIVED!")
     logger.info(f"Full URL: {request.url}")
     logger.info(f"Query params: {dict(request.query)}")
-    logger.info("="*50)
+    logger.info("=" * 50)
     
     authority = request.query.get('Authority')
     status = request.query.get('Status')
@@ -5483,12 +5494,12 @@ async def zarinpal_callback(request):
         # ✅ پردازش async
         asyncio.create_task(process_successful_payment(authority))
         
-        # نمایش صفحه موفق
+        # 📄 نمایش صفحه موفق
         try:
             with open(success_path, 'r', encoding='utf-8') as f:
                 html_content = f.read()
             logger.info("✅ Success page loaded and sent")
-            return web.Response(text=html_content, content_type='text/html; charset=utf-8')
+            return web.Response(text=html_content, content_type='text/html', charset='utf-8')
         except FileNotFoundError:
             logger.error(f"❌ Success page not found: {success_path}")
             html = """
@@ -5501,7 +5512,7 @@ async def zarinpal_callback(request):
             </body>
             </html>
             """
-            return web.Response(text=html, content_type='text/html; charset=utf-8')
+            return web.Response(text=html, content_type='text/html', charset='utf-8')
     
     else:
         logger.warning(f"❌ Payment failed or cancelled. Authority: {authority}, Status: {status}")
@@ -5509,12 +5520,12 @@ async def zarinpal_callback(request):
         if authority:
             update_payment_status(authority, 'failed')
         
-        # نمایش صفحه ناموفق
+        # 📄 نمایش صفحه ناموفق
         try:
             with open(failure_path, 'r', encoding='utf-8') as f:
                 html_content = f.read()
             logger.info("✅ Failure page loaded and sent")
-            return web.Response(text=html_content, content_type='text/html; charset=utf-8')
+            return web.Response(text=html_content, content_type='text/html', charset='utf-8')
         except FileNotFoundError:
             logger.error(f"❌ Failure page not found: {failure_path}")
             html = """
@@ -5527,7 +5538,8 @@ async def zarinpal_callback(request):
             </body>
             </html>
             """
-            return web.Response(text=html, content_type='text/html; charset=utf-8')
+            return web.Response(text=html, content_type='text/html', charset='utf-8')
+
 
 
 async def process_successful_payment(authority):
