@@ -5543,9 +5543,9 @@ async def zarinpal_callback(request):
 
 
 
-async def process_successful_payment(authority: str):
+async def process_successful_payment(authority):
     """✅ پردازش پرداخت موفق"""
-    logger.info("="*50)
+    
     logger.info(f"🔄 Processing payment: {authority}")
     
     try:
@@ -5555,65 +5555,41 @@ async def process_successful_payment(authority: str):
             logger.error(f"❌ Payment not found: {authority}")
             return
         
-        logger.info(f"✅ Payment found: {payment}")
-        
-        # ✅ تغییر: فقط اگر ref_id داشت = کاملاً پردازش شده
-        if payment['status'] == 'success' and payment.get('ref_id'):
-            logger.warning(f"⚠️ Already fully processed: {authority}")
+        # ✅ چک کردن اینکه قبلاً پردازش نشده باشد
+        if payment['ref_id'] is not None:
+            logger.warning(f"⚠️ Already processed: {authority}")
             return
         
-        # ✅ تایید با زرین‌پال
+        # Verify با ریال (از دیتابیس)
         merchant_id = get_setting('zarinpal_merchant', ZARINPAL_MERCHANT)
         zp = ZarinPal(merchant_id, ZARINPAL_SANDBOX)
         
-        amount_toman = payment['amount']
-        amount_rial = amount_toman * 10
-        
-        logger.info(f"🔍 Verifying: toman={amount_toman}, rial={amount_rial}")
-        
-        verify_result = zp.verify_payment(authority, amount_rial)
-        logger.info(f"📝 Verify result: {verify_result}")
+        logger.info(f"🔍 Verifying: rial={payment['amount']}")
+        verify_result = zp.verify_payment(authority, payment['amount'])  # ✅
         
         if verify_result.get('data', {}).get('code') == 100:
             ref_id = verify_result['data']['ref_id']
             logger.info(f"✅ Verified! RefID: {ref_id}")
             
-            user_id = payment['user_id']
-            
-            # ✅ اول سرویس بساز، بعد وضعیت رو تغییر بده
+            # ✅ انجام عملیات (ساخت سرویس / شارژ)
             if payment['payment_type'] == 'package':
-                logger.info("📦 Creating service...")
-                success = await create_service_for_payment(user_id, payment, ref_id)
-                
-                if success:
-                    # ✅ فقط اگر سرویس ساخته شد، وضعیت تغییر کنه
-                    update_payment_status(authority, 'success', ref_id)
-                    logger.info(f"✅ Service created & status updated!")
-                else:
-                    logger.error("❌ Service creation failed!")
-                    # وضعیت رو failed نمی‌کنیم تا بعداً retry بشه
-                
+                await send_service_activation_message(payment['user_id'], payment, ref_id)
             elif payment['payment_type'] == 'wallet':
-                logger.info("💰 Charging wallet...")
-                update_user_balance(user_id, amount_toman, f"شارژ - کد: {ref_id}")
-                await send_wallet_charge_message(user_id, payment, ref_id)
-                
-                # ✅ حالا وضعیت رو تغییر بده
-                update_payment_status(authority, 'success', ref_id)
-                logger.info(f"✅ Wallet charged & status updated!")
+                await send_wallet_charge_message(payment['user_id'], payment, ref_id)
             
-        elif verify_result.get('data', {}).get('code') == 101:
-            logger.warning("⚠️ Payment already verified by ZarinPal")
-            # اگه verify نشده بود ولی زرین‌پال میگه verified، دوباره سرویس بساز
-            
+            # ✅ بروزرسانی وضعیت (آخرین مرحله)
+            update_payment_status(authority, 'success', ref_id)
+            logger.info(f"✅ Status updated to success")
+        
         else:
             error_code = verify_result.get('data', {}).get('code')
             logger.error(f"❌ Verify failed! Code: {error_code}")
             update_payment_status(authority, 'failed')
-            
+    
     except Exception as e:
         logger.error(f"❌ Error: {e}")
         logger.exception(e)
+
 
 
 async def create_service_for_payment(user_id, payment, ref_id):
@@ -5678,24 +5654,27 @@ async def create_service_for_payment(user_id, payment, ref_id):
 
 async def send_service_activation_message(user_id, payment, ref_id):
     """ارسال پیام فعال‌سازی سرویس"""
+    
     pkg_id = payment['package_id']
     pkg = PACKAGES.get(pkg_id)
     
     if not pkg:
         return
     
-    # ساخت سرویس
+    # ✅ تبدیل ریال به تومان برای نمایش
+    toman_price = payment['amount'] // 10
+    
     marzban_username = generate_username(user_id, None, None)
     result = await marzban.create_user(marzban_username, pkg['traffic'], pkg['duration'])
     
     if result:
         from datetime import datetime, timedelta
         expire_date = datetime.now() + timedelta(days=pkg['duration'])
-        create_order(user_id, pkg_id, marzban_username, pkg['price'], expire_date, result['subscription_url'])
+        create_order(user_id, pkg_id, marzban_username, toman_price, expire_date, result['subscription_url'])
         
         text = f"✅ <b>پرداخت موفق!</b>\n\n"
         text += f"📦 پکیج: {pkg['name']}\n"
-        text += f"💰 مبلغ: {format_price(pkg['price'])}\n"
+        text += f"💰 مبلغ: {format_price(toman_price)}\n"
         text += f"🔢 کد پیگیری: <code>{ref_id}</code>\n\n"
         text += f"👤 نام کاربری: <code>{marzban_username}</code>\n"
         text += f"📊 حجم: {format_bytes(pkg['traffic'])}\n"
@@ -5714,10 +5693,14 @@ async def send_service_activation_message(user_id, payment, ref_id):
 
 async def send_wallet_charge_message(user_id, payment, ref_id):
     """ارسال پیام شارژ کیف پول"""
-    update_user_balance(user_id, payment['amount'], f"شارژ آنلاین - کد: {ref_id}")
+    
+    # ✅ تبدیل ریال به تومان برای نمایش
+    toman_amount = payment['amount'] // 10
+    
+    update_user_balance(user_id, toman_amount, f"شارژ آنلاین - کد: {ref_id}")
     
     text = f"✅ <b>شارژ موفق!</b>\n\n"
-    text += f"💰 مبلغ: {format_price(payment['amount'])}\n"
+    text += f"💰 مبلغ: {format_price(toman_amount)}\n"
     text += f"🔢 کد پیگیری: <code>{ref_id}</code>\n\n"
     text += f"💵 موجودی جدید: {format_price(get_user(user_id)['balance'])}"
     
@@ -5726,6 +5709,7 @@ async def send_wallet_charge_message(user_id, payment, ref_id):
         text=text,
         parse_mode='HTML'
     )
+
 
 
 async def start_webserver():
