@@ -1349,67 +1349,63 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # در تابع button_handler اضافه کنید:
 
     elif data.startswith("verify_payment_"):
-        authority = data[15:]  # حذف "verify_payment_"
-    
+        authority = data[15:]
         await query.message.edit_text("⏳ در حال بررسی پرداخت...")
-    
-    # دریافت اطلاعات پرداخت
+
         payment = get_payment_by_authority(authority)
-    
+
         if not payment:
             await query.message.edit_text("❌ اطلاعات پرداخت یافت نشد!")
             return
-    
+
         if payment['status'] == 'success':
             await query.message.edit_text(
                 "✅ این پرداخت قبلاً تایید شده است.\n\n"
                 "سرویس شما فعال است."
             )
             return
-    
+
         if payment['user_id'] != user_id:
             await query.message.edit_text("❌ این پرداخت متعلق به شما نیست!")
             return
-    
-    # تایید با زرین‌پال
+
         merchant_id = get_setting('zarinpal_merchant', ZARINPAL_MERCHANT)
         zp = ZarinPal(merchant_id, ZARINPAL_SANDBOX)
-    
-        verify_result = zp.verify_payment(authority, payment['amount'])
-    
+
+        # ✅ تبدیل تومان به ریال برای verify
+        amount_rial = payment['amount'] * 10
+
+        verify_result = zp.verify_payment(authority, amount_rial)
+
         if verify_result.get('data', {}).get('code') == 100:
             ref_id = verify_result['data']['ref_id']
-        
-        # بروزرسانی وضعیت
             update_payment_status(authority, 'success', ref_id)
-        
-        # پردازش بر اساس نوع
+
             if payment['payment_type'] == 'package':
                 pkg_id = payment['package_id']
                 pkg = PACKAGES.get(pkg_id)
-            
+
                 if pkg:
-                # ساخت سرویس
                     marzban_username = generate_username(user_id, update.effective_user.username, update.effective_user.first_name)
                     result = await marzban.create_user(marzban_username, pkg['traffic'], pkg['duration'])
-                
+
                     if result:
                         expire_date = datetime.now() + timedelta(days=pkg['duration'])
                         create_order(user_id, pkg_id, marzban_username, pkg['price'], expire_date, result['subscription_url'])
-                    
+
                         text = f"✅ <b>پرداخت موفق!</b>\n\n"
                         text += f"📦 پکیج: {pkg['name']}\n"
-                        text += f"💰 مبلغ: {format_price(pkg['price'])}\n"
+                        text += f"💰 مبلغ: {format_price(payment['amount'])}\n"  # ✅ تومان
                         text += f"🔢 کد پیگیری: <code>{ref_id}</code>\n\n"
                         text += f"👤 نام کاربری: <code>{marzban_username}</code>\n"
                         text += f"📊 حجم: {format_bytes(pkg['traffic'])}\n"
                         text += f"📅 تاریخ انقضا: {format_date(expire_date)}\n\n"
                         text += f"🔗 لینک اتصال:\n<code>{result['subscription_url']}</code>\n\n"
                         text += "✅ سرویس شما فعال شد!"
-                    
+
                         keyboard = [[InlineKeyboardButton("🏠 بازگشت به منو", callback_data="back_to_main")]]
                         await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
-                    
+
                         log_admin_action(0, 'purchase_online', user_id, f"خرید {pkg['name']} با زرین‌پال")
                     else:
                         await query.message.edit_text(
@@ -1419,21 +1415,37 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             f"🔢 کد پیگیری: <code>{ref_id}</code>",
                             parse_mode='HTML'
                         )
-        
+
         elif payment['payment_type'] == 'wallet':
-            # شارژ کیف پول
-                update_user_balance(user_id, payment['amount'], f"شارژ آنلاین - کد پیگیری: {ref_id}")
+            update_user_balance(user_id, payment['amount'], f"شارژ آنلاین - کد پیگیری: {ref_id}")
+
+            text = f"✅ <b>شارژ موفق!</b>\n\n"
+            text += f"💰 مبلغ: {format_price(payment['amount'])}\n"  # ✅ تومان
+            text += f"🔢 کد پیگیری: <code>{ref_id}</code>\n\n"
+            text += f"💵 موجودی جدید: {format_price(get_user(user_id)['balance'])}"
+
+            await query.message.edit_text(text, parse_mode='HTML')
+            log_admin_action(0, 'wallet_charge', user_id, f"شارژ {format_price(payment['amount'])}")
+
+        else:
+            error_code = verify_result.get('data', {}).get('code', 'نامشخص')
+        # ... بقیه کد خطاها
+
+        
+        # elif payment['payment_type'] == 'wallet':
+        #     # شارژ کیف پول
+        #         update_user_balance(user_id, payment['amount'], f"شارژ آنلاین - کد پیگیری: {ref_id}")
             
-                text = f"✅ <b>شارژ موفق!</b>\n\n"
-                text += f"💰 مبلغ: {format_price(payment['amount'])}\n"
-                text += f"🔢 کد پیگیری: <code>{ref_id}</code>\n\n"
-                text += f"💵 موجودی جدید: {format_price(get_user(user_id)['balance'])}"
+        #         text = f"✅ <b>شارژ موفق!</b>\n\n"
+        #         text += f"💰 مبلغ: {format_price(payment['amount'])}\n"
+        #         text += f"🔢 کد پیگیری: <code>{ref_id}</code>\n\n"
+        #         text += f"💵 موجودی جدید: {format_price(get_user(user_id)['balance'])}"
             
-                await query.message.edit_text(text, parse_mode='HTML')
+        #         await query.message.edit_text(text, parse_mode='HTML')
             
-                log_admin_action(0, 'wallet_charge_online', user_id, f"شارژ {format_price(payment['amount'])} با زرین‌پال")
+        #         log_admin_action(0, 'wallet_charge_online', user_id, f"شارژ {format_price(payment['amount'])} با زرین‌پال")
     
-        elif verify_result.get('data', {}).get('code') == 101:
+    elif verify_result.get('data', {}).get('code') == 101:
             await query.message.edit_text(
                 "✅ پرداخت شما قبلاً تایید شده است.\n\n"
                 "اگر سرویس دریافت نکرده‌اید با پشتیبانی تماس بگیرید."
