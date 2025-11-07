@@ -5544,44 +5544,133 @@ async def zarinpal_callback(request):
 
 
 async def process_successful_payment(authority: str):
-    """پردازش پرداخت موفق"""
+    """✅ پردازش پرداخت موفق"""
+    logger.info("="*50)
+    logger.info(f"🔄 Processing payment: {authority}")
+    
     try:
         payment = get_payment_by_authority(authority)
+        
         if not payment:
-            logger.error(f"Payment not found: {authority}")
+            logger.error(f"❌ Payment not found: {authority}")
             return
-
-        if payment['status'] == 'success':
-            logger.info(f"Payment already processed: {authority}")
+        
+        logger.info(f"✅ Payment found: {payment}")
+        
+        # ✅ تغییر: فقط اگر ref_id داشت = کاملاً پردازش شده
+        if payment['status'] == 'success' and payment.get('ref_id'):
+            logger.warning(f"⚠️ Already fully processed: {authority}")
             return
-
-        # تایید با زرین‌پال
+        
+        # ✅ تایید با زرین‌پال
         merchant_id = get_setting('zarinpal_merchant', ZARINPAL_MERCHANT)
         zp = ZarinPal(merchant_id, ZARINPAL_SANDBOX)
         
-        verify_result = zp.verify_payment(authority, payment['amount'])
-
+        amount_toman = payment['amount']
+        amount_rial = amount_toman * 10
+        
+        logger.info(f"🔍 Verifying: toman={amount_toman}, rial={amount_rial}")
+        
+        verify_result = zp.verify_payment(authority, amount_rial)
+        logger.info(f"📝 Verify result: {verify_result}")
+        
         if verify_result.get('data', {}).get('code') == 100:
             ref_id = verify_result['data']['ref_id']
-            update_payment_status(authority, 'success', ref_id)
-
+            logger.info(f"✅ Verified! RefID: {ref_id}")
+            
             user_id = payment['user_id']
-
+            
+            # ✅ اول سرویس بساز، بعد وضعیت رو تغییر بده
             if payment['payment_type'] == 'package':
-                # ساخت سرویس
-                pkg = PACKAGES.get(payment['package_id'])
-                if pkg:
-                    # لاجیک ساخت سرویس...
-                    pass
-
+                logger.info("📦 Creating service...")
+                success = await create_service_for_payment(user_id, payment, ref_id)
+                
+                if success:
+                    # ✅ فقط اگر سرویس ساخته شد، وضعیت تغییر کنه
+                    update_payment_status(authority, 'success', ref_id)
+                    logger.info(f"✅ Service created & status updated!")
+                else:
+                    logger.error("❌ Service creation failed!")
+                    # وضعیت رو failed نمی‌کنیم تا بعداً retry بشه
+                
             elif payment['payment_type'] == 'wallet':
-                # شارژ کیف پول
-                update_user_balance(user_id, payment['amount'] // 10, f"شارژ - کد: {ref_id}")
-
-            logger.info(f"✅ Payment processed: {authority}")
-
+                logger.info("💰 Charging wallet...")
+                update_user_balance(user_id, amount_toman, f"شارژ - کد: {ref_id}")
+                await send_wallet_charge_message(user_id, payment, ref_id)
+                
+                # ✅ حالا وضعیت رو تغییر بده
+                update_payment_status(authority, 'success', ref_id)
+                logger.info(f"✅ Wallet charged & status updated!")
+            
+        elif verify_result.get('data', {}).get('code') == 101:
+            logger.warning("⚠️ Payment already verified by ZarinPal")
+            # اگه verify نشده بود ولی زرین‌پال میگه verified، دوباره سرویس بساز
+            
+        else:
+            error_code = verify_result.get('data', {}).get('code')
+            logger.error(f"❌ Verify failed! Code: {error_code}")
+            update_payment_status(authority, 'failed')
+            
     except Exception as e:
-        logger.error(f"Error processing payment: {e}")
+        logger.error(f"❌ Error: {e}")
+        logger.exception(e)
+
+
+async def create_service_for_payment(user_id, payment, ref_id):
+    """✅ ساخت سرویس با return موفقیت"""
+    try:
+        pkg_id = payment['package_id']
+        pkg = PACKAGES.get(pkg_id)
+        
+        if not pkg:
+            logger.error(f"❌ Package not found: {pkg_id}")
+            return False
+        
+        marzban_username = generate_username(user_id, None, None)
+        result = await marzban.create_user(marzban_username, pkg['traffic'], pkg['duration'])
+        
+        if result:
+            from datetime import datetime, timedelta
+            expire_date = datetime.now() + timedelta(days=pkg['duration'])
+            create_order(user_id, pkg_id, marzban_username, pkg['price'], expire_date, result['subscription_url'])
+            
+            text = f"✅ <b>پرداخت موفق!</b>\n\n"
+            text += f"📦 پکیج: {pkg['name']}\n"
+            text += f"💰 مبلغ: {format_price(pkg['price'])}\n"
+            text += f"🔢 کد پیگیری: <code>{ref_id}</code>\n\n"
+            text += f"👤 نام کاربری: <code>{marzban_username}</code>\n"
+            text += f"📊 حجم: {format_bytes(pkg['traffic'])}\n"
+            text += f"📅 تاریخ انقضا: {format_date(expire_date)}\n\n"
+            text += f"🔗 لینک اتصال:\n<code>{result['subscription_url']}</code>"
+            
+            keyboard = [[InlineKeyboardButton("🏠 منو اصلی", callback_data="back_to_main")]]
+            
+            await application.bot.send_message(
+                chat_id=user_id,
+                text=text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='HTML'
+            )
+            
+            logger.info(f"✅ Service created successfully!")
+            return True  # ✅ موفق
+        else:
+            logger.error(f"❌ Marzban create_user failed")
+            
+            await application.bot.send_message(
+                chat_id=user_id,
+                text=f"❌ خطا در ساخت سرویس!\n\n"
+                     f"پرداخت موفق بود اما سرویس ساخته نشد.\n"
+                     f"🔢 کد پیگیری: <code>{ref_id}</code>\n\n"
+                     f"با پشتیبانی تماس بگیرید.",
+                parse_mode='HTML'
+            )
+            return False  # ❌ ناموفق
+            
+    except Exception as e:
+        logger.error(f"❌ Error in create_service: {e}")
+        return False
+
 
 
 
