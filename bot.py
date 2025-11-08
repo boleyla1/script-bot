@@ -1344,7 +1344,91 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
-
+async def process_renewal_payment(order_id):
+    """پردازش تمدید پس از پرداخت موفق"""
+    conn = db.get_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    cursor.execute("SELECT * FROM orders WHERE id = %s", (order_id,))
+    renewal_order = cursor.fetchone()
+    
+    if not renewal_order or renewal_order.get('order_type') != 'renewal':
+        cursor.close()
+        conn.close()
+        return False
+    
+    parent_order_id = renewal_order.get('parent_order_id')
+    cursor.execute("SELECT * FROM orders WHERE id = %s", (parent_order_id,))
+    parent_order = cursor.fetchone()
+    
+    cursor.close()
+    conn.close()
+    
+    if not parent_order:
+        return False
+    
+    pkg = get_package(renewal_order['package_id'])
+    if not pkg:
+        return False
+    
+    days = pkg['duration']
+    marzban_username = parent_order.get('marzban_username')
+    
+    if not marzban_username:
+        return False
+    
+    user_data = await marzban.get_user(marzban_username)
+    if not user_data:
+        return False
+    
+    current_expire = user_data.get('expire', 0)
+    if current_expire:
+        if current_expire > 10000000000:
+            current_expire_dt = datetime.fromtimestamp(current_expire / 1000)
+        else:
+            current_expire_dt = datetime.fromtimestamp(current_expire)
+    else:
+        current_expire_dt = datetime.now()
+    
+    if current_expire_dt < datetime.now():
+        new_expire = datetime.now() + timedelta(days=days)
+    else:
+        new_expire = current_expire_dt + timedelta(days=days)
+    
+    new_expire_timestamp = int(new_expire.timestamp())
+    
+    update_payload = {
+        "proxies": user_data.get('proxies', {}),
+        "inbounds": user_data.get('inbounds', {}),
+        "expire": new_expire_timestamp,
+        "data_limit": user_data.get('data_limit', 0),
+        "data_limit_reset_strategy": user_data.get('data_limit_reset_strategy', 'no_reset'),
+        "status": "active"
+    }
+    
+    success = await marzban.modify_user(marzban_username, **update_payload)
+    
+    if success:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "UPDATE orders SET expires_at = %s, status = 'active' WHERE id = %s",
+            (new_expire, parent_order_id)
+        )
+        
+        cursor.execute(
+            "UPDATE orders SET status = 'completed' WHERE id = %s",
+            (order_id,)
+        )
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return True
+    
+    return False
 
 
 
@@ -1556,7 +1640,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )  
 
 
-    # در تابع button_handler اضافه کنید:
+        # در تابع button_handler اضافه کنید:
 
     elif data.startswith("verify_payment_"):
         authority = data[15:]
@@ -1591,7 +1675,31 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ref_id = verify_result['data']['ref_id']
             update_payment_status(authority, 'success', ref_id)
 
-            if payment['payment_type'] == 'package':
+            # ✅ بررسی نوع پرداخت
+            if payment['payment_type'] == 'renewal':
+             # 🔄 پردازش تمدید
+                order_id = payment.get('order_id')
+            
+                if order_id:
+                    success = await process_renewal_payment(order_id)
+                
+                    if success:
+                        text = f"✅ <b>تمدید موفق!</b>\n\n"
+                        text += f"💰 مبلغ: {format_price(payment['amount'])}\n"
+                        text += f"🔢 کد پیگیری: <code>{ref_id}</code>\n\n"
+                        text += "✅ سرویس شما با موفقیت تمدید شد!"
+                    
+                        keyboard = [[InlineKeyboardButton("🏠 بازگشت به منو", callback_data="back_to_main")]]
+                        await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+                    
+                        log_admin_action(0, 'renewal_success', user_id, f"تمدید سرویس - {format_price(payment['amount'])}")
+                    else:
+                        await query.message.edit_text("❌ خطا در تمدید سرویس. لطفاً با پشتیبانی تماس بگیرید.")
+                else:
+                    await query.message.edit_text("❌ اطلاعات سفارش یافت نشد!")
+
+            elif payment['payment_type'] == 'package':
+                # 📦 خرید جدید (کد قبلی شما)
                 pkg_id = payment['package_id']
                 pkg = get_package(pkg_id)
 
@@ -1616,28 +1724,25 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         keyboard = [[InlineKeyboardButton("🏠 بازگشت به منو", callback_data="back_to_main")]]
                         await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
 
-                        log_admin_action(0, 'purchase_online', user_id, f"خرید {pkg['name']} با زرین‌پال")
+                        log_admin_action(0, 'service_created', user_id, f"{pkg['name']} - {marzban_username}")
                     else:
-                        await query.message.edit_text(
-                            "❌ خطا در ساخت سرویس!\n\n"
-                            "پرداخت شما موفق بود اما در ساخت سرویس مشکلی پیش آمد.\n"
-                            "لطفاً با پشتیبانی تماس بگیرید.\n\n"
-                            f"🔢 کد پیگیری: <code>{ref_id}</code>",
-                            parse_mode='HTML'
-                        )
+                        await query.message.edit_text("❌ خطا در ایجاد سرویس!")
+                else:
+                    await query.message.edit_text("❌ پکیج یافت نشد!")
 
-        elif payment['payment_type'] == 'wallet':
-            update_user_balance(user_id, payment['amount'], f"شارژ آنلاین - کد پیگیری: {ref_id}")
+            elif payment['payment_type'] == 'wallet':
+            # 💳 شارژ کیف پول (کد قبلی شما)
+                update_user_balance (user_id, payment['amount'])
 
-            text = f"✅ <b>شارژ موفق!</b>\n\n"
-            text += f"💰 مبلغ: {format_price(payment['amount'])}\n"
-            text += f"🔢 کد پیگیری: <code>{ref_id}</code>\n\n"
-            text += f"💵 موجودی جدید: {format_price(get_user(user_id)['balance'])}"
+                text = f"✅ <b>شارژ کیف پول موفق!</b>\n\n"
+                text += f"💰 مبلغ: {format_price(payment['amount'])}\n"
+                text += f"🔢 کد پیگیری: <code>{ref_id}</code>\n\n"
+                text += f"💵 موجودی فعلی: {format_price(get_user(user_id)['balance'])}"
 
-            keyboard = [[InlineKeyboardButton("🏠 بازگشت به منو", callback_data="back_to_main")]]
-            await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+                keyboard = [[InlineKeyboardButton("🏠 بازگشت به منو", callback_data="back_to_main")]]
+                await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
 
-            log_admin_action(0, 'wallet_charge', user_id, f"شارژ {format_price(payment['amount'])}")
+                log_admin_action(0, 'wallet_charge', user_id, f"شارژ {format_price(payment['amount'])}")
 
         else:
             error_code = verify_result.get('data', {}).get('code', 'نامشخص')
@@ -1654,10 +1759,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"علت: {error_msg}\n\n"
                 f"لطفاً با پشتیبانی تماس بگیرید.",
                 parse_mode='HTML'
-            )
+            )   
 
             update_payment_status(authority, 'failed')
             log_admin_action(0, 'payment_failed', user_id, f"پرداخت ناموفق - کد: {error_code}")
+
 
 
 
@@ -1688,43 +1794,234 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard.append([InlineKeyboardButton("🏠 بازگشت", callback_data="back_to_main")])
             await safe_edit_message(query, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
 
+
+
     elif data.startswith("service_detail_"):
-        order_id = int(data[15:])
-        orders = get_user_orders(user_id)
-        order = next((o for o in orders if o['id'] == order_id), None)
+        """نمایش جزئیات سرویس کاربر"""
+        order_id = int(data.split("_")[-1])
+        
+        conn = db.get_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(
+            "SELECT * FROM orders WHERE id = %s AND user_id = %s",
+            (order_id, user_id)
+        )
+        order = cursor.fetchone()
+        cursor.close()
+        conn.close()
         
         if not order:
-            await query.answer("❌ سرویس یافت نشد", show_alert=True)
+            await safe_edit_message(query, "❌ سرویس یافت نشد.")
             return
         
-        # دریافت اطلاعات از Marzban
-        usage = await marzban.get_user_usage(order['marzban_username'])
+        # دریافت اطلاعات پکیج
+        package_id = order.get('package_id')
+        pkg = get_package(package_id) if package_id else None
         
-        pkg = get_package(order['package_id']) or {}
-        text = f"📊 <b>جزئیات سرویس</b>\n\n"
-        text += f"📦 پکیج: {pkg.get('name', 'نامشخص')}\n"
-        text += f"👤 نام کاربری: <code>{order['marzban_username']}</code>\n"
+        if not pkg:
+            await safe_edit_message(query, "❌ اطلاعات پکیج یافت نشد.")
+            return
         
-        if usage:
-            text += f"📊 مصرف شده: {usage['used_gb']} GB از {usage['total_gb']} GB\n"
-            text += f"📊 باقیمانده: {usage['remaining_gb']} GB\n"
-            text += f"📅 تاریخ انقضا: {format_date(usage['expire'])}\n"
-            text += f"🔌 وضعیت: {'✅ فعال' if usage['status'] == 'active' else '❌ غیرفعال'}\n"
+        status_emoji = {
+            'active': '✅',
+            'pending': '⏳',
+            'expired': '❌',
+            'disabled': '🔴'
+        }
         
-        text += f"\n🔗 لینک اتصال:\n<code>{order['subscription_url']}</code>"
+        status_text = {
+            'active': 'فعال',
+            'pending': 'در انتظار',
+            'expired': 'منقضی شده',
+            'disabled': 'غیرفعال'
+        }
         
-        keyboard = [
-            [InlineKeyboardButton("🔄 تمدید سرویس", callback_data=f"renew_{order_id}")],
-            [InlineKeyboardButton("🗑 حذف سرویس", callback_data=f"delete_service_{order_id}")],
-            [InlineKeyboardButton("🔙 بازگشت", callback_data="my_services")]
-        ]
+        text = (
+            f"📦 <b>جزئیات سرویس</b>\n\n"
+            f"🆔 شناسه: <code>{order['id']}</code>\n"
+            f"📦 پکیج: {pkg['name']}\n"
+            f"💾 حجم: {pkg['traffic'] / (1024**3):.0f} GB\n"
+            f"⏰ مدت: {pkg['duration']} روز\n"
+            f"💰 قیمت: {format_price(pkg['price'])}\n"
+            f"{status_emoji.get(order['status'], '❓')} وضعیت: {status_text.get(order['status'], 'نامشخص')}\n"
+        )
         
-        await safe_edit_message(query, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+        if order.get('marzban_username'):
+            text += f"👤 Username: <code>{order['marzban_username']}</code>\n"
+        
+        if order.get('expires_at'):
+            text += f"📅 انقضا: {format_date(order['expires_at'])}\n"
+        
+        keyboard = []
+        
+        # دکمه تمدید (فقط برای سرویس‌های فعال یا منقضی)
+        if order['status'] in ['active', 'expired']:
+            keyboard.append([
+                InlineKeyboardButton("🔄 تمدید سرویس", callback_data=f"user_renew_{order_id}")
+            ])
+        
+        # دکمه مشاهده کانفیگ (فقط برای فعال)
+        if order['status'] == 'active' and order.get('marzban_username'):
+            keyboard.append([
+                InlineKeyboardButton("🔗 دریافت کانفیگ", callback_data=f"user_config_{order_id}")
+            ])
+        
+        keyboard.append([
+            InlineKeyboardButton("🔙 بازگشت", callback_data="my_services")
+        ])
+        
+        await safe_edit_message(
+            query,
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='HTML'
+        )
+
+
 
     elif data.startswith("renew_"):
+        """نمایش گزینه‌های تمدید"""
         order_id = int(data[6:])
-        # TODO: پیاده‌سازی تمدید
-        await query.answer("⚠️ تمدید سرویس به زودی فعال می‌شود", show_alert=True)
+        
+        conn = db.get_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(
+            "SELECT * FROM orders WHERE id = %s AND user_id = %s",
+            (order_id, user_id)
+        )
+        order = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        if not order:
+            await safe_edit_message(query, "❌ سرویس یافت نشد.")
+            return
+        
+        # دریافت قیمت پکیج
+        package_id = order.get('package_id')
+        pkg = get_package(package_id) if package_id else None
+        
+        if not pkg:
+            await safe_edit_message(query, "❌ اطلاعات پکیج یافت نشد.")
+            return
+        
+        # محاسبه قیمت‌های تمدید
+        base_price = pkg['price']
+        
+        renewal_options = [
+            {'days': 7, 'price': int(base_price * 0.25)},
+            {'days': 15, 'price': int(base_price * 0.5)},
+            {'days': 30, 'price': base_price},
+            {'days': 60, 'price': int(base_price * 1.9)},
+            {'days': 90, 'price': int(base_price * 2.7)},
+        ]
+        
+        text = (
+            f"🔄 <b>تمدید سرویس</b>\n\n"
+            f"📦 پکیج: {pkg['name']}\n"
+            f"💾 حجم: {pkg['traffic'] / (1024**3):.0f} GB\n\n"
+            f"گزینه مورد نظر را انتخاب کنید:"
+        )
+        
+        keyboard = []
+        for opt in renewal_options:
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"{opt['days']} روز - {format_price(opt['price'])}",
+                    callback_data=f"renew_confirm_{order_id}_{opt['days']}"
+                )
+            ])
+        
+        keyboard.append([
+            InlineKeyboardButton("🔙 بازگشت", callback_data=f"service_detail_{order_id}")
+        ])
+        
+        await safe_edit_message(
+            query,
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='HTML'
+        )
+
+    elif data.startswith("renew_confirm_"):
+        """تأیید و ایجاد سفارش تمدید"""
+        parts = data.split("_")
+        order_id = int(parts[2])
+        days = int(parts[3])
+        
+        conn = db.get_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(
+            "SELECT * FROM orders WHERE id = %s AND user_id = %s",
+            (order_id, user_id)
+        )
+        order = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        if not order:
+            await safe_edit_message(query, "❌ سرویس یافت نشد.")
+            return
+        
+        # دریافت قیمت
+        package_id = order.get('package_id')
+        pkg = get_package(package_id) if package_id else None
+        
+        if not pkg:
+            await safe_edit_message(query, "❌ اطلاعات پکیج یافت نشد.")
+            return
+        
+        base_price = pkg['price']
+        
+        # محاسبه قیمت بر اساس تعداد روز
+        price_multipliers = {
+            7: 0.25,
+            15: 0.5,
+            30: 1,
+            60: 1.9,
+            90: 2.7
+        }
+        
+        renewal_price = int(base_price * price_multipliers.get(days, 1))
+        
+        # ایجاد سفارش تمدید
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            """INSERT INTO orders 
+            (user_id, package_id, price, status, order_type, parent_order_id)
+            VALUES (%s, %s, %s, %s, %s, %s)""",
+            (user_id, package_id, renewal_price, 'pending', 'renewal', order_id)
+        )
+        
+        new_order_id = cursor.lastrowid
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        # نمایش گزینه‌های پرداخت
+        text = (
+            f"💳 <b>پرداخت تمدید</b>\n\n"
+            f"📦 پکیج: {pkg['name']}\n"
+            f"⏰ مدت: {days} روز\n"
+            f"💰 مبلغ: {format_price(renewal_price)}\n\n"
+            f"روش پرداخت را انتخاب کنید:"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("💳 درگاه پرداخت", callback_data=f"pay_gateway_{new_order_id}")],
+            [InlineKeyboardButton("💎 کیف پول", callback_data=f"pay_wallet_{new_order_id}")],
+            [InlineKeyboardButton("❌ انصراف", callback_data=f"service_detail_{order_id}")]
+        ]
+        
+        await safe_edit_message(
+            query,
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='HTML'
+        )
+
 
     elif data.startswith("delete_service_"):
         order_id = int(data[15:])
