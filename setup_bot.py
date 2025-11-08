@@ -7,6 +7,7 @@ import getpass
 import mysql.connector
 from mysql.connector import Error
 
+
 class Colors:
     GREEN = '\033[92m'
     RED = '\033[91m'
@@ -16,35 +17,42 @@ class Colors:
     BOLD = '\033[1m'
     RESET = '\033[0m'
 
+
 def clear():
     os.system('clear' if os.name == 'posix' else 'cls')
+
 
 def print_success(msg):
     print(f"{Colors.GREEN}✅ {msg}{Colors.RESET}")
 
+
 def print_error(msg):
     print(f"{Colors.RED}❌ {msg}{Colors.RESET}")
+
 
 def print_warning(msg):
     print(f"{Colors.YELLOW}⚠️  {msg}{Colors.RESET}")
 
+
 def print_step(num, msg):
-    print(f"\n{Colors.BOLD}{'='*60}")
+    print(f"\n{Colors.BOLD}{'=' * 60}")
     print(f"[مرحله {num}] {msg}")
-    print(f"{'='*60}{Colors.RESET}")
+    print(f"{'=' * 60}{Colors.RESET}")
+
 
 def get_input(prompt, default=None, hide=False):
     if default:
         prompt = f"{Colors.CYAN}{prompt} [{default}]: {Colors.RESET}"
     else:
         prompt = f"{Colors.CYAN}{prompt}: {Colors.RESET}"
-    
+
     if hide:
         value = getpass.getpass(prompt)
         return value if value else default
     else:
         value = input(prompt).strip()
         return value if value else default
+
 
 def test_mysql_connection(host, port, user, password):
     """تست اتصال به MySQL"""
@@ -62,6 +70,7 @@ def test_mysql_connection(host, port, user, password):
         return False
     return False
 
+
 def create_database(host, port, user, password, db_name):
     """ایجاد دیتابیس جدید"""
     try:
@@ -78,6 +87,7 @@ def create_database(host, port, user, password, db_name):
         print_error(f"خطا در ساخت دیتابیس: {e}")
         return False
 
+
 def create_tables(host, port, user, password, db_name):
     """ایجاد جداول دیتابیس"""
     try:
@@ -85,7 +95,7 @@ def create_tables(host, port, user, password, db_name):
             host=host, port=port, user=user, password=password, database=db_name
         )
         cursor = conn.cursor()
-        
+
         cursor.execute('''CREATE TABLE IF NOT EXISTS users (
             user_id BIGINT PRIMARY KEY,
             username VARCHAR(255),
@@ -152,6 +162,7 @@ def create_tables(host, port, user, password, db_name):
     except Error as e:
         print_error(f"خطا در ساخت جداول: {e}")
         return False
+
 
 def create_env_file(config):
     """ایجاد فایل .env"""
@@ -228,8 +239,8 @@ def main():
     if db_choice == 'y':
         config['mysql_database'] = get_input("📦 نام دیتابیس جدید", "vpn_bot_db")
         if create_database(config['mysql_host'], int(config['mysql_port']),
-                          config['mysql_user'], config['mysql_password'],
-                          config['mysql_database']):
+                           config['mysql_user'], config['mysql_password'],
+                           config['mysql_database']):
             print_success(f"دیتابیس '{config['mysql_database']}' ساخته شد!")
         else:
             sys.exit(1)
@@ -238,8 +249,8 @@ def main():
 
     print(f"\n{Colors.YELLOW}⏳ ایجاد جداول دیتابیس...{Colors.RESET}")
     if create_tables(config['mysql_host'], int(config['mysql_port']),
-                    config['mysql_user'], config['mysql_password'],
-                    config['mysql_database']):
+                     config['mysql_user'], config['mysql_password'],
+                     config['mysql_database']):
         print_success("جداول با موفقیت ایجاد شدند!")
     else:
         sys.exit(1)
@@ -295,4 +306,3 @@ if __name__ == "__main__":
     except Exception as e:
         print_error(f"خطای غیرمنتظره: {e}")
         sys.exit(1)
-

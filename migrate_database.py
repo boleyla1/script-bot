@@ -15,6 +15,7 @@ MYSQL_CONFIG = {
     'database': os.getenv('MYSQL_DATABASE')
 }
 
+
 def column_exists(cursor, table, column):
     """بررسی وجود ستون در جدول"""
     cursor.execute("""
@@ -25,6 +26,7 @@ def column_exists(cursor, table, column):
         AND COLUMN_NAME = %s
     """, (MYSQL_CONFIG['database'], table, column))
     return cursor.fetchone()[0] > 0
+
 
 def index_exists(cursor, table, index_name):
     """بررسی وجود index در جدول"""
@@ -37,6 +39,7 @@ def index_exists(cursor, table, index_name):
     """, (MYSQL_CONFIG['database'], table, index_name))
     return cursor.fetchone()[0] > 0
 
+
 def table_exists(cursor, table_name):
     """بررسی وجود جدول"""
     cursor.execute("""
@@ -47,12 +50,13 @@ def table_exists(cursor, table_name):
     """, (MYSQL_CONFIG['database'], table_name))
     return cursor.fetchone()[0] > 0
 
+
 # ==================== ایجاد جداول اصلی ====================
 
 def create_users_table(cursor, conn):
     """ایجاد جدول users"""
     print("🔄 بررسی جدول users...")
-    
+
     if not table_exists(cursor, 'users'):
         print("  ➕ ایجاد جدول users...")
         cursor.execute('''CREATE TABLE users (
@@ -78,10 +82,11 @@ def create_users_table(cursor, conn):
     else:
         print("  ✓ جدول users موجود است")
 
+
 def create_packages_table(cursor, conn):
     """ایجاد جدول packages"""
     print("🔄 بررسی جدول packages...")
-    
+
     if not table_exists(cursor, 'packages'):
         print("  ➕ ایجاد جدول packages...")
         cursor.execute('''CREATE TABLE packages (
@@ -97,7 +102,7 @@ def create_packages_table(cursor, conn):
             INDEX idx_active (is_active),
             INDEX idx_sort (sort_order)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci''')
-        
+
         # وارد کردن پکیج‌های پیش‌فرض
         default_packages = [
             ("1month_30gb", "1 ماهه 30 گیگ", 30, 32212254720, 10000, 1, 1),
@@ -107,21 +112,22 @@ def create_packages_table(cursor, conn):
             ("6month_300gb", "6 ماهه 300 گیگ", 180, 322122547200, 450000, 1, 5),
             ("12month_600gb", "1 ساله 600 گیگ", 365, 644245094400, 800000, 1, 6),
         ]
-        
+
         cursor.executemany("""
             INSERT INTO packages (id, name, duration, traffic, price, is_active, sort_order)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
         """, default_packages)
-        
+
         conn.commit()
         print("  ✅ جدول packages ایجاد شد و پکیج‌های پیش‌فرض وارد شدند")
     else:
         print("  ✓ جدول packages موجود است")
 
+
 def create_orders_table(cursor, conn):
     """ایجاد جدول orders"""
     print("🔄 بررسی جدول orders...")
-    
+
     if not table_exists(cursor, 'orders'):
         print("  ➕ ایجاد جدول orders...")
         cursor.execute('''CREATE TABLE orders (
@@ -147,10 +153,11 @@ def create_orders_table(cursor, conn):
     else:
         print("  ✓ جدول orders موجود است")
 
+
 def create_transactions_table(cursor, conn):
     """ایجاد جدول transactions"""
     print("🔄 بررسی جدول transactions...")
-    
+
     if not table_exists(cursor, 'transactions'):
         print("  ➕ ایجاد جدول transactions...")
         cursor.execute('''CREATE TABLE transactions (
@@ -172,10 +179,11 @@ def create_transactions_table(cursor, conn):
     else:
         print("  ✓ جدول transactions موجود است")
 
+
 def create_payments_table(cursor, conn):
     """ایجاد جدول payments"""
     print("🔄 بررسی جدول payments...")
-    
+
     if not table_exists(cursor, 'payments'):
         print("  ➕ ایجاد جدول payments...")
         cursor.execute('''CREATE TABLE payments (
@@ -198,10 +206,11 @@ def create_payments_table(cursor, conn):
     else:
         print("  ✓ جدول payments موجود است")
 
+
 def create_coupons_table(cursor, conn):
     """ایجاد جدول coupons"""
     print("🔄 بررسی جدول coupons...")
-    
+
     if not table_exists(cursor, 'coupons'):
         print("  ➕ ایجاد جدول coupons...")
         cursor.execute('''CREATE TABLE coupons (
@@ -222,10 +231,11 @@ def create_coupons_table(cursor, conn):
     else:
         print("  ✓ جدول coupons موجود است")
 
+
 def create_coupon_usage_table(cursor, conn):
     """ایجاد جدول coupon_usage"""
     print("🔄 بررسی جدول coupon_usage...")
-    
+
     if not table_exists(cursor, 'coupon_usage'):
         print("  ➕ ایجاد جدول coupon_usage...")
         cursor.execute('''CREATE TABLE coupon_usage (
@@ -241,10 +251,11 @@ def create_coupon_usage_table(cursor, conn):
     else:
         print("  ✓ جدول coupon_usage موجود است")
 
+
 def create_campaigns_table(cursor, conn):
     """ایجاد جدول campaigns"""
     print("🔄 بررسی جدول campaigns...")
-    
+
     if not table_exists(cursor, 'campaigns'):
         print("  ➕ ایجاد جدول campaigns...")
         cursor.execute('''CREATE TABLE campaigns (
@@ -262,10 +273,11 @@ def create_campaigns_table(cursor, conn):
     else:
         print("  ✓ جدول campaigns موجود است")
 
+
 def create_admin_logs_table(cursor, conn):
     """ایجاد جدول admin_logs"""
     print("🔄 بررسی جدول admin_logs...")
-    
+
     if not table_exists(cursor, 'admin_logs'):
         print("  ➕ ایجاد جدول admin_logs...")
         cursor.execute('''CREATE TABLE admin_logs (
@@ -284,10 +296,11 @@ def create_admin_logs_table(cursor, conn):
     else:
         print("  ✓ جدول admin_logs موجود است")
 
+
 def create_bot_settings_table(cursor, conn):
     """ایجاد جدول bot_settings"""
     print("🔄 بررسی جدول bot_settings...")
-    
+
     if not table_exists(cursor, 'bot_settings'):
         print("  ➕ ایجاد جدول bot_settings...")
         cursor.execute('''CREATE TABLE bot_settings (
@@ -295,7 +308,7 @@ def create_bot_settings_table(cursor, conn):
             setting_value TEXT,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci''')
-        
+
         # تنظیمات پیش‌فرض
         default_settings = {
             'referral_inviter_reward': '10000',
@@ -303,27 +316,28 @@ def create_bot_settings_table(cursor, conn):
             'welcome_message': 'به ربات VPN خوش آمدید! 🚀',
             'min_wallet_charge': '10000'
         }
-        
+
         for key, value in default_settings.items():
             cursor.execute("""
                 INSERT INTO bot_settings (setting_key, setting_value) 
                 VALUES (%s, %s) 
                 ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)
             """, (key, value))
-        
+
         conn.commit()
         print("  ✅ جدول bot_settings ایجاد شد")
     else:
         print("  ✓ جدول bot_settings موجود است")
+
 
 # ==================== Migration جداول موجود ====================
 
 def migrate_users_table(cursor, conn):
     """Migration جدول users"""
     print("🔄 بررسی ستون‌های جدول users...")
-    
+
     changes_made = False
-    
+
     # اضافه کردن user_tag
     if not column_exists(cursor, 'users', 'user_tag'):
         print("  ➕ اضافه کردن ستون user_tag...")
@@ -333,7 +347,7 @@ def migrate_users_table(cursor, conn):
         """)
         changes_made = True
         print("  ✅ ستون user_tag اضافه شد")
-    
+
     # اضافه کردن admin_note
     if not column_exists(cursor, 'users', 'admin_note'):
         print("  ➕ اضافه کردن ستون admin_note...")
@@ -343,7 +357,7 @@ def migrate_users_table(cursor, conn):
         """)
         changes_made = True
         print("  ✅ ستون admin_note اضافه شد")
-    
+
     # اضافه کردن index برای user_tag
     if not index_exists(cursor, 'users', 'idx_tag'):
         print("  ➕ اضافه کردن index idx_tag...")
@@ -353,24 +367,25 @@ def migrate_users_table(cursor, conn):
         """)
         changes_made = True
         print("  ✅ Index idx_tag اضافه شد")
-    
+
     if changes_made:
         conn.commit()
         print("✅ تغییرات جدول users ذخیره شد\n")
     else:
         print("✓ جدول users به‌روز است\n")
 
+
 def migrate_orders_table(cursor, conn):
     """Migration جدول orders"""
     print("🔄 بررسی indexهای جدول orders...")
-    
+
     changes_made = False
     indexes = [
         ('idx_marzban', 'marzban_username'),
         ('idx_expires', 'expires_at'),
         ('idx_package', 'package_id')
     ]
-    
+
     for index_name, column_name in indexes:
         if not index_exists(cursor, 'orders', index_name):
             print(f"  ➕ اضافه کردن index {index_name}...")
@@ -380,23 +395,24 @@ def migrate_orders_table(cursor, conn):
             """)
             changes_made = True
             print(f"  ✅ Index {index_name} اضافه شد")
-    
+
     if changes_made:
         conn.commit()
         print("✅ تغییرات جدول orders ذخیره شد\n")
     else:
         print("✓ جدول orders به‌روز است\n")
 
+
 def migrate_transactions_table(cursor, conn):
     """Migration جدول transactions"""
     print("🔄 بررسی indexهای جدول transactions...")
-    
+
     changes_made = False
     indexes = [
         ('idx_admin', 'admin_id'),
         ('idx_date', 'created_at')
     ]
-    
+
     for index_name, column_name in indexes:
         if not index_exists(cursor, 'transactions', index_name):
             print(f"  ➕ اضافه کردن index {index_name}...")
@@ -406,19 +422,20 @@ def migrate_transactions_table(cursor, conn):
             """)
             changes_made = True
             print(f"  ✅ Index {index_name} اضافه شد")
-    
+
     if changes_made:
         conn.commit()
         print("✅ تغییرات جدول transactions ذخیره شد\n")
     else:
         print("✓ جدول transactions به‌روز است\n")
 
+
 def migrate_payments_table(cursor, conn):
     """Migration جدول payments"""
     print("🔄 بررسی indexهای جدول payments...")
-    
+
     changes_made = False
-    
+
     if not index_exists(cursor, 'payments', 'idx_user'):
         print("  ➕ اضافه کردن index idx_user...")
         cursor.execute("""
@@ -427,42 +444,43 @@ def migrate_payments_table(cursor, conn):
         """)
         changes_made = True
         print("  ✅ Index idx_user اضافه شد")
-    
+
     if changes_made:
         conn.commit()
         print("✅ تغییرات جدول payments ذخیره شد\n")
     else:
         print("✓ جدول payments به‌روز است\n")
 
+
 # ==================== بررسی نهایی ====================
 
 def verify_database_structure(cursor):
     """بررسی نهایی ساختار دیتابیس"""
     print("🔍 بررسی نهایی ساختار دیتابیس...\n")
-    
+
     # بررسی جدول packages
     print("📊 ساختار جدول packages:")
     cursor.execute("DESCRIBE packages")
     for row in cursor.fetchall():
         print(f"  {row[0]:20} {row[1]:30} {row[2]:10}")
-    
-    print("\n" + "="*70 + "\n")
-    
+
+    print("\n" + "=" * 70 + "\n")
+
     # بررسی جدول users
     print("📊 ساختار جدول users:")
     cursor.execute("DESCRIBE users")
     for row in cursor.fetchall():
         print(f"  {row[0]:20} {row[1]:30} {row[2]:10}")
-    
-    print("\n" + "="*70 + "\n")
-    
+
+    print("\n" + "=" * 70 + "\n")
+
     # شمارش رکوردها
     tables = [
-        'users', 'packages', 'orders', 'transactions', 'payments', 
-        'coupons', 'coupon_usage', 'campaigns', 
+        'users', 'packages', 'orders', 'transactions', 'payments',
+        'coupons', 'coupon_usage', 'campaigns',
         'admin_logs', 'bot_settings'
     ]
-    
+
     print("📈 تعداد رکوردها:")
     for table in tables:
         try:
@@ -471,24 +489,28 @@ def verify_database_structure(cursor):
             print(f"  {table:20} {count:>10} رکورد")
         except Error:
             print(f"  {table:20} {'جدول وجود ندارد':>20}")
-    
-    print("\n" + "="*70 + "\n")
+
+    print("\n" + "=" * 70 + "\n")
+
 
 # ==================== اجرای اصلی ====================
 
 def main():
     """اجرای migration کامل"""
-    print("="*70)
+    print("=" * 70)
     print("🚀 شروع Migration دیتابیس VPN Bot با پشتیبانی مدیریت پکیج")
-    print("="*70 + "\n")
-    
+    print("=" * 70 + "\n")
+
+    conn = None  # ✅ مقداردهی اولیه
+    cursor = None  # ✅ مقداردهی اولیه
+
     try:
         # اتصال به دیتابیس
         conn = mysql.connector.connect(**MYSQL_CONFIG)
         cursor = conn.cursor()
-        
+
         print(f"✅ اتصال به دیتابیس '{MYSQL_CONFIG['database']}' برقرار شد\n")
-        
+
         # ایجاد جداول اصلی (ترتیب مهم است به خاطر Foreign Keys)
         create_users_table(cursor, conn)
         create_packages_table(cursor, conn)  # ← جدول جدید
@@ -500,33 +522,36 @@ def main():
         create_campaigns_table(cursor, conn)
         create_admin_logs_table(cursor, conn)
         create_bot_settings_table(cursor, conn)
-        
-        print("\n" + "="*70 + "\n")
-        
+
+        print("\n" + "=" * 70 + "\n")
+
         # اجرای migrationها برای جداول موجود
         migrate_users_table(cursor, conn)
         migrate_orders_table(cursor, conn)
         migrate_transactions_table(cursor, conn)
         migrate_payments_table(cursor, conn)
-        
+
         # بررسی نهایی
         verify_database_structure(cursor)
-        
-        print("="*70)
+
+        print("=" * 70)
         print("🎉 Migration با موفقیت کامل شد!")
-        print("="*70)
-        
+        print("=" * 70)
+
+        return True  # ✅ موفق
+
     except Error as e:
         print(f"\n❌ خطا در migration: {e}")
         return False
-        
+
     finally:
-        if conn.is_connected():
-            cursor.close()
+        # ✅ بررسی قبل از بستن
+        if conn is not None and conn.is_connected():
+            if cursor is not None:
+                cursor.close()
             conn.close()
             print("\n🔌 اتصال به دیتابیس بسته شد")
-    
-    return True
+
 
 if __name__ == '__main__':
     success = main()

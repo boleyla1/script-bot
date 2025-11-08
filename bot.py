@@ -25,6 +25,10 @@ import time
 from telegram.ext import Defaults
 from telegram.request import HTTPXRequest
 from aiohttp import web
+from persiantools.jdatetime import JalaliDate
+
+
+
 
 
 
@@ -377,6 +381,8 @@ def set_setting(key: str, value: str):
     cursor.close()
     conn.close()
 
+def gregorian_to_jalali(year, month, day):
+    return JalaliDate.to_jalali(year, month, day)
 # ==================== ADMIN PACKAGE MANAGEMENT FUNCTIONS ====================
 
 async def show_admin_packages_menu(query):
@@ -5748,99 +5754,136 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ==================== PACKAGE MANAGEMENT TEXT HANDLERS ====================
     elif state == WAITING_PACKAGE_PRICE:
+        if user_id not in ADMIN_IDS:
+            return
+
         try:
-            new_price = int(update.message.text.replace(',', '')) 
+            price = int(update.message.text.replace(',', ''))
         
-            if new_price <= 0:
-                raise ValueError
+            if price < 0:
+                await update.message.reply_text("❌ قیمت نمی‌تواند منفی باشد.")
+                return
+
+            pkg_id = context.user_data.get('editing_package_id')
+            update_package(pkg_id, price=price)  # ✅ ذخیره موفق
+
+            # ✅ پیام موفقیت واضح
+            pkg = get_package(pkg_id)
         
-            package_id = context.user_data.get('editing_package_id')
+            await update.message.reply_text(
+                f"✅ <b>قیمت پکیج تغییر یافت!</b>\n\n"
+                f"📦 پکیج: {pkg['name']}\n"
+                f"💰 قیمت جدید: {format_price(price)}",
+                parse_mode='HTML'
+            )
         
-            if update_package(package_id, price=new_price):
-                await update.message.reply_text(
-                    f"✅ قیمت پکیج به {format_price(new_price)} تغییر یافت",
-                    reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("🔙 بازگشت", callback_data=f"admin_package_view_{package_id}")
-                    ]])
-                )
-                log_admin_action(user_id, 'package_edit', package_id, f"تغییر قیمت به {new_price}")
-            else:
-                await update.message.reply_text("❌ خطا در ذخیره‌سازی")
-        
+        # ✅ پاکسازی state
             context.user_data.pop('state', None)
             context.user_data.pop('editing_package_id', None)
-        
+
         except ValueError:
-            await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید")
+            await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید.")
+        except Exception as e:
+            logger.error(f"خطا در ویرایش قیمت پکیج: {e}")
+            await update.message.reply_text(
+                f"❌ خطا در ذخیره‌سازی!\n\n"
+                f"لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید."
+            )
+
 
     elif state == WAITING_PACKAGE_NAME:
+        if user_id not in ADMIN_IDS:
+            return
+
         new_name = update.message.text.strip()
-        package_id = context.user_data.get('editing_package_id')
     
-        if update_package(package_id, name=new_name):
+        if len(new_name) < 2:
+            await update.message.reply_text("❌ نام پکیج باید حداقل 2 کاراکتر باشد.")
+            return
+
+        pkg_id = context.user_data.get('editing_package_id')
+    
+        try:
+            update_package(pkg_id, name=new_name)  # ✅ ذخیره
+        
             await update.message.reply_text(
-                f"✅ نام پکیج به '{new_name}' تغییر یافت",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔙 بازگشت", callback_data=f"admin_package_view_{package_id}")
-                ]])
+                f"✅ <b>نام پکیج تغییر یافت!</b>\n\n"
+                f"🆔 شناسه: {pkg_id}\n"
+                f"📦 نام جدید: {new_name}",
+                parse_mode='HTML'
             )
-            log_admin_action(user_id, 'package_edit', package_id, f"تغییر نام به {new_name}")
-        else:
-            await update.message.reply_text("❌ خطا در ذخیره‌سازی")
-    
-        context.user_data.pop('state', None)
-        context.user_data.pop('editing_package_id', None)
+        
+            context.user_data.pop('state', None)
+            context.user_data.pop('editing_package_id', None)
+        
+        except Exception as e:
+            logger.error(f"خطا در ویرایش نام پکیج: {e}")
+            await update.message.reply_text("❌ خطا در ذخیره‌سازی!")
+
 
     elif state == WAITING_PACKAGE_DURATION:
+        if user_id not in ADMIN_IDS:
+            return
+
         try:
-            new_duration = int(update.message.text)
-            if new_duration <= 0:
-                raise ValueError
+            duration = int(update.message.text.replace(',', ''))
         
-            package_id = context.user_data.get('editing_package_id')
+            if duration < 1:
+                await update.message.reply_text("❌ مدت زمان باید حداقل 1 روز باشد.")
+                return
+
+            pkg_id = context.user_data.get('editing_package_id')
+            update_package(pkg_id, duration=duration)
         
-            if update_package(package_id, duration=new_duration):
-                await update.message.reply_text(
-                    f"✅ مدت پکیج به {new_duration} روز تغییر یافت",
-                    reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔙 بازگشت", callback_data=f"admin_package_view_{package_id}")
-                    ]])
-                )
-                log_admin_action(user_id, 'package_edit', package_id, f"تغییر مدت به {new_duration}")
-            else:
-                await update.message.reply_text("❌ خطا در ذخیره‌سازی")
+            await update.message.reply_text(
+                f"✅ <b>مدت زمان پکیج تغییر یافت!</b>\n\n"
+                f"📦 شناسه: {pkg_id}\n"
+                f"⏰ مدت جدید: {duration} روز",
+                parse_mode='HTML'
+            )
         
             context.user_data.pop('state', None)
             context.user_data.pop('editing_package_id', None)
-        
+
         except ValueError:
-            await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید")
+            await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید.")
+        except Exception as e:
+            logger.error(f"خطا در ویرایش مدت پکیج: {e}")
+            await update.message.reply_text("❌ خطا در ذخیره‌سازی!")
+
 
     elif state == WAITING_PACKAGE_TRAFFIC:
+        if user_id not in ADMIN_IDS:
+            return
+
         try:
-            traffic_gb = float(update.message.text)
-            if traffic_gb <= 0:
-                raise ValueError
+            traffic_gb = int(update.message.text.replace(',', ''))
         
-            traffic_bytes = int(traffic_gb * 1024 * 1024 * 1024)
-            package_id = context.user_data.get('editing_package_id')
+            if traffic_gb < 1:
+                await update.message.reply_text("❌ حجم باید حداقل 1 گیگابایت باشد.")
+                return
+
+            traffic_bytes = traffic_gb * 1024 * 1024 * 1024  # تبدیل به بایت
         
-            if update_package(package_id, traffic=traffic_bytes):
-                await update.message.reply_text(
-                    f"✅ حجم پکیج به {traffic_gb} گیگابایت تغییر یافت",
-                    reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("🔙 بازگشت", callback_data=f"admin_package_view_{package_id}")
-                    ]])
-                )
-                log_admin_action(user_id, 'package_edit', package_id, f"تغییر حجم به {traffic_gb}GB")
-            else:
-                await update.message.reply_text("❌ خطا در ذخیره‌سازی")
+            pkg_id = context.user_data.get('editing_package_id')
+            update_package(pkg_id, traffic=traffic_bytes)
+        
+            await update.message.reply_text(
+                f"✅ <b>حجم پکیج تغییر یافت!</b>\n\n"
+                f"📦 شناسه: {pkg_id}\n"
+                f"📊 حجم جدید: {traffic_gb} GB",
+                parse_mode='HTML'
+            )
         
             context.user_data.pop('state', None)
             context.user_data.pop('editing_package_id', None)
-        
+
         except ValueError:
-            await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید (مثال: 30)")
+            await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید.")
+        except Exception as e:
+            logger.error(f"خطا در ویرایش حجم پکیج: {e}")
+            await update.message.reply_text("❌ خطا در ذخیره‌سازی!")
+
 
 
 # ==================== ZARINPAL CALLBACK WEBSERVER ====================
@@ -6035,7 +6078,8 @@ async def send_service_activation_message(user_id, payment, ref_id):
     """ارسال پیام فعال‌سازی سرویس"""
     
     pkg_id = payment['package_id']
-    pkg = PACKAGES.get(pkg_id)
+    pkg = get_package(pkg_id)  # ✅ از دیتابیس
+        
     
     if not pkg:
         return
