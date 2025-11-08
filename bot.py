@@ -1372,7 +1372,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         merchant_id = get_setting('zarinpal_merchant', ZARINPAL_MERCHANT)
         zp = ZarinPal(merchant_id, ZARINPAL_SANDBOX)
 
-        # ✅ تبدیل تومان به ریال برای verify
+        # ✅ تبدیل تومان به ریال
         amount_rial = payment['amount'] * 10
 
         verify_result = zp.verify_payment(authority, amount_rial)
@@ -1395,7 +1395,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                         text = f"✅ <b>پرداخت موفق!</b>\n\n"
                         text += f"📦 پکیج: {pkg['name']}\n"
-                        text += f"💰 مبلغ: {format_price(payment['amount'])}\n"  # ✅ تومان
+                        text += f"💰 مبلغ: {format_price(payment['amount'])}\n"
                         text += f"🔢 کد پیگیری: <code>{ref_id}</code>\n\n"
                         text += f"👤 نام کاربری: <code>{marzban_username}</code>\n"
                         text += f"📊 حجم: {format_bytes(pkg['traffic'])}\n"
@@ -1420,59 +1420,34 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             update_user_balance(user_id, payment['amount'], f"شارژ آنلاین - کد پیگیری: {ref_id}")
 
             text = f"✅ <b>شارژ موفق!</b>\n\n"
-            text += f"💰 مبلغ: {format_price(payment['amount'])}\n"  # ✅ تومان
+            text += f"💰 مبلغ: {format_price(payment['amount'])}\n"
             text += f"🔢 کد پیگیری: <code>{ref_id}</code>\n\n"
             text += f"💵 موجودی جدید: {format_price(get_user(user_id)['balance'])}"
 
-            await query.message.edit_text(text, parse_mode='HTML')
+            keyboard = [[InlineKeyboardButton("🏠 بازگشت به منو", callback_data="back_to_main")]]
+            await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
             log_admin_action(0, 'wallet_charge', user_id, f"شارژ {format_price(payment['amount'])}")
 
         else:
             error_code = verify_result.get('data', {}).get('code', 'نامشخص')
-        # ... بقیه کد خطاها
-
-        
-        # elif payment['payment_type'] == 'wallet':
-        #     # شارژ کیف پول
-        #         update_user_balance(user_id, payment['amount'], f"شارژ آنلاین - کد پیگیری: {ref_id}")
-            
-        #         text = f"✅ <b>شارژ موفق!</b>\n\n"
-        #         text += f"💰 مبلغ: {format_price(payment['amount'])}\n"
-        #         text += f"🔢 کد پیگیری: <code>{ref_id}</code>\n\n"
-        #         text += f"💵 موجودی جدید: {format_price(get_user(user_id)['balance'])}"
-            
-        #         await query.message.edit_text(text, parse_mode='HTML')
-            
-        #         log_admin_action(0, 'wallet_charge_online', user_id, f"شارژ {format_price(payment['amount'])} با زرین‌پال")
-    
-    elif verify_result.get('data', {}).get('code') == 101:
-            await query.message.edit_text(
-                "✅ پرداخت شما قبلاً تایید شده است.\n\n"
-                "اگر سرویس دریافت نکرده‌اید با پشتیبانی تماس بگیرید."
-            )
-        else:
-            error_code = verify_result.get('data', {}).get('code', 'نامشخص')
-            update_payment_status(authority, 'failed')
-        
             error_messages = {
-                -9: "خطای اعتبارسنجی (Merchant ID یا Authority نامعتبر)",
-                -10: "IP یا Merchant ID نامعتبر",
-                -11: "Merchant ID فعال نیست",
-                -15: "درگاه پرداخت تعلیق شده",
-                -16: "سطح تایید Merchant نامعتبر",
-                -50: "مبلغ کمتر از حد مجاز",
-                -51: "مبلغ بیشتر از حد مجاز",
-                -54: "Authority منقضی شده"
+                -9: 'خطای اعتبارسنجی',
+                -10: 'IP یا مرچنت کد پذیرنده صحیح نیست',
+                -11: 'مرچنت کد فعال نیست',
+                -54: 'درخواست مورد نظر آرشیو شده است'
             }
-        
-            error_msg = error_messages.get(error_code, "خطای نامشخص")
-        
+            error_msg = error_messages.get(error_code, f"خطای نامشخص (کد: {error_code})")
+
             await query.message.edit_text(
-                f"❌ پرداخت ناموفق بود!\n\n"
-                f"کد خطا: {error_code}\n"
-                f"توضیح: {error_msg}\n\n"
-                f"لطفاً مجدداً تلاش کنید یا با پشتیبانی تماس بگیرید."
+                f"❌ پرداخت ناموفق!\n\n"
+                f"علت: {error_msg}\n\n"
+                f"لطفاً با پشتیبانی تماس بگیرید.",
+                parse_mode='HTML'
             )
+
+            update_payment_status(authority, 'failed')
+            log_admin_action(0, 'payment_failed', user_id, f"پرداخت ناموفق - کد: {error_code}")
 
 
 
