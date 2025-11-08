@@ -3,6 +3,7 @@ import os
 from dotenv import load_dotenv
 import mysql.connector
 from mysql.connector import Error
+import time
 
 load_dotenv()
 
@@ -77,6 +78,46 @@ def create_users_table(cursor, conn):
     else:
         print("  ✓ جدول users موجود است")
 
+def create_packages_table(cursor, conn):
+    """ایجاد جدول packages"""
+    print("🔄 بررسی جدول packages...")
+    
+    if not table_exists(cursor, 'packages'):
+        print("  ➕ ایجاد جدول packages...")
+        cursor.execute('''CREATE TABLE packages (
+            id VARCHAR(50) PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            duration INT NOT NULL COMMENT 'تعداد روز',
+            traffic BIGINT NOT NULL COMMENT 'ترافیک به بایت',
+            price INT NOT NULL,
+            is_active TINYINT(1) DEFAULT 1,
+            sort_order INT DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX idx_active (is_active),
+            INDEX idx_sort (sort_order)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci''')
+        
+        # وارد کردن پکیج‌های پیش‌فرض
+        default_packages = [
+            ("1month_30gb", "1 ماهه 30 گیگ", 30, 32212254720, 10000, 1, 1),
+            ("1month_60gb", "1 ماهه 60 گیگ", 30, 64424509440, 90000, 1, 2),
+            ("2month_100gb", "2 ماهه 100 گیگ", 60, 107374182400, 150000, 1, 3),
+            ("3month_120gb", "3 ماهه 120 گیگ", 90, 128849018880, 250000, 1, 4),
+            ("6month_300gb", "6 ماهه 300 گیگ", 180, 322122547200, 450000, 1, 5),
+            ("12month_600gb", "1 ساله 600 گیگ", 365, 644245094400, 800000, 1, 6),
+        ]
+        
+        cursor.executemany("""
+            INSERT INTO packages (id, name, duration, traffic, price, is_active, sort_order)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """, default_packages)
+        
+        conn.commit()
+        print("  ✅ جدول packages ایجاد شد و پکیج‌های پیش‌فرض وارد شدند")
+    else:
+        print("  ✓ جدول packages موجود است")
+
 def create_orders_table(cursor, conn):
     """ایجاد جدول orders"""
     print("🔄 بررسی جدول orders...")
@@ -97,7 +138,9 @@ def create_orders_table(cursor, conn):
             INDEX idx_status (status),
             INDEX idx_marzban (marzban_username),
             INDEX idx_expires (expires_at),
-            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            INDEX idx_package (package_id),
+            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+            FOREIGN KEY (package_id) REFERENCES packages(id) ON DELETE SET NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci''')
         conn.commit()
         print("  ✅ جدول orders ایجاد شد")
@@ -324,7 +367,8 @@ def migrate_orders_table(cursor, conn):
     changes_made = False
     indexes = [
         ('idx_marzban', 'marzban_username'),
-        ('idx_expires', 'expires_at')
+        ('idx_expires', 'expires_at'),
+        ('idx_package', 'package_id')
     ]
     
     for index_name, column_name in indexes:
@@ -396,6 +440,14 @@ def verify_database_structure(cursor):
     """بررسی نهایی ساختار دیتابیس"""
     print("🔍 بررسی نهایی ساختار دیتابیس...\n")
     
+    # بررسی جدول packages
+    print("📊 ساختار جدول packages:")
+    cursor.execute("DESCRIBE packages")
+    for row in cursor.fetchall():
+        print(f"  {row[0]:20} {row[1]:30} {row[2]:10}")
+    
+    print("\n" + "="*70 + "\n")
+    
     # بررسی جدول users
     print("📊 ساختار جدول users:")
     cursor.execute("DESCRIBE users")
@@ -406,7 +458,7 @@ def verify_database_structure(cursor):
     
     # شمارش رکوردها
     tables = [
-        'users', 'orders', 'transactions', 'payments', 
+        'users', 'packages', 'orders', 'transactions', 'payments', 
         'coupons', 'coupon_usage', 'campaigns', 
         'admin_logs', 'bot_settings'
     ]
@@ -427,7 +479,7 @@ def verify_database_structure(cursor):
 def main():
     """اجرای migration کامل"""
     print("="*70)
-    print("🚀 شروع Migration دیتابیس VPN Bot")
+    print("🚀 شروع Migration دیتابیس VPN Bot با پشتیبانی مدیریت پکیج")
     print("="*70 + "\n")
     
     try:
@@ -437,8 +489,9 @@ def main():
         
         print(f"✅ اتصال به دیتابیس '{MYSQL_CONFIG['database']}' برقرار شد\n")
         
-        # ایجاد جداول اصلی
+        # ایجاد جداول اصلی (ترتیب مهم است به خاطر Foreign Keys)
         create_users_table(cursor, conn)
+        create_packages_table(cursor, conn)  # ← جدول جدید
         create_orders_table(cursor, conn)
         create_transactions_table(cursor, conn)
         create_payments_table(cursor, conn)

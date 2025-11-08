@@ -81,14 +81,7 @@ BOT_USERNAME = os.getenv('BOT_USERNAME', 'Testvpnmehrbot')  # ✅ یکی حذف 
 ) = range(38)  # ✅ تعداد کل: 38 استیت
 
 # پکیج‌ها (قابل مدیریت از پنل ادمین)
-PACKAGES = {
-    "1month_30gb": {"name": "1 ماهه 30 گیگ", "duration": 30, "traffic": 32212254720, "price": 10000, "active": True},
-    "1month_60gb": {"name": "1 ماهه 60 گیگ", "duration": 30, "traffic": 64424509440, "price": 90000, "active": True},
-    "2month_100gb": {"name": "2 ماهه 100 گیگ", "duration": 60, "traffic": 107374182400, "price": 150000, "active": True},
-    "3month_120gb": {"name": "3 ماهه 120 گیگ", "duration": 90, "traffic": 128849018880, "price": 250000, "active": True},
-    "6month_300gb": {"name": "6 ماهه 300 گیگ", "duration": 180, "traffic": 322122547200, "price": 450000, "active": True},
-    "12month_600gb": {"name": "1 ساله 600 گیگ", "duration": 365, "traffic": 644245094400, "price": 800000, "active": True},
-}
+
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -256,6 +249,80 @@ def init_db():
     conn.close()
     logger.info("✅ جداول MySQL ایجاد شدند")
 
+# ==================== Package Management Functions ====================
+def get_all_packages(active_only=True):
+    """دریافت لیست پکیج‌ها"""
+    conn = db.get_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    query = "SELECT * FROM packages"
+    if active_only:
+        query += " WHERE is_active = 1"
+    query += " ORDER BY sort_order ASC"
+    
+    cursor.execute(query)
+    packages = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return packages
+
+def get_package(package_id: str):
+    """دریافت یک پکیج خاص"""
+    conn = db.get_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT * FROM packages WHERE id = %s", (package_id,))
+    package = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return package
+
+def update_package(package_id: str, **kwargs):
+    """ویرایش پکیج"""
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    
+    allowed_fields = ['name', 'duration', 'traffic', 'price', 'is_active', 'sort_order']
+    updates = []
+    values = []
+    
+    for field, value in kwargs.items():
+        if field in allowed_fields:
+            updates.append(f"{field} = %s")
+            values.append(value)
+    
+    if updates:
+        values.append(package_id)
+        query = f"UPDATE packages SET {', '.join(updates)} WHERE id = %s"
+        cursor.execute(query, values)
+        conn.commit()
+    
+    cursor.close()
+    conn.close()
+
+def create_package(package_id: str, name: str, duration: int, traffic: int, price: int):
+    """ایجاد پکیج جدید"""
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        INSERT INTO packages (id, name, duration, traffic, price, is_active, sort_order)
+        VALUES (%s, %s, %s, %s, %s, 1, (SELECT IFNULL(MAX(sort_order), 0) + 1 FROM packages p))
+    """, (package_id, name, duration, traffic, price))
+    
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def delete_package(package_id: str):
+    """حذف پکیج"""
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM packages WHERE id = %s", (package_id,))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
 # ==================== Helper Functions ====================
 def generate_random_suffix(length=5):
     return ''.join(random.choices(string.digits, k=length))
@@ -309,6 +376,131 @@ def set_setting(key: str, value: str):
     conn.commit()
     cursor.close()
     conn.close()
+
+# ==================== ADMIN PACKAGE MANAGEMENT FUNCTIONS ====================
+
+async def show_admin_packages_menu(query):
+    """نمایش منوی مدیریت پکیج‌ها"""
+    packages = get_all_packages(active_only=False)
+    
+    text = "🎁 <b>مدیریت پکیج‌ها</b>\n\n"
+    text += f"📦 تعداد پکیج‌ها: {len(packages)}\n"
+    text += f"✅ فعال: {sum(1 for p in packages if p['is_active'])}\n"
+    text += f"❌ غیرفعال: {sum(1 for p in packages if not p['is_active'])}\n\n"
+    
+    keyboard = []
+    
+    for pkg in packages:
+        status_icon = "✅" if pkg['is_active'] else "❌"
+        keyboard.append([InlineKeyboardButton(
+            f"{status_icon} {pkg['name']} - {format_price(pkg['price'])}",
+            callback_data=f"admin_package_view_{pkg['id']}"
+        )])
+    
+    keyboard.append([InlineKeyboardButton("➕ افزودن پکیج جدید", callback_data="admin_pkg_add")])
+    keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")])
+    
+    await safe_edit_message(query, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def show_admin_package_detail(query, package_id):
+    """نمایش جزئیات یک پکیج"""
+    pkg = get_package(package_id)
+    
+    if not pkg:
+        await query.answer("❌ پکیج یافت نشد", show_alert=True)
+        return
+    
+    text = f"📦 <b>جزئیات پکیج</b>\n\n"
+    text += f"🏷️ نام: {pkg['name']}\n"
+    text += f"💰 قیمت: {format_price(pkg['price'])}\n"
+    text += f"📊 حجم: {format_bytes(pkg['traffic'])}\n"
+    text += f"📅 مدت: {pkg['duration']} روز\n"
+    text += f"📊 وضعیت: {'✅ فعال' if pkg['is_active'] else '❌ غیرفعال'}\n"
+    text += f"🔢 ترتیب نمایش: {pkg['sort_order']}\n"
+    
+    status_text = "غیرفعال کردن" if pkg['is_active'] else "فعال کردن"
+    status_icon = "❌" if pkg['is_active'] else "✅"
+    
+    keyboard = [
+        [InlineKeyboardButton("✏️ ویرایش نام", callback_data=f"admin_pkg_edit_name_{package_id}"),
+         InlineKeyboardButton("💰 ویرایش قیمت", callback_data=f"admin_pkg_edit_price_{package_id}")],
+        [InlineKeyboardButton("📊 ویرایش حجم", callback_data=f"admin_pkg_edit_traffic_{package_id}"),
+         InlineKeyboardButton("📅 ویرایش مدت", callback_data=f"admin_pkg_edit_duration_{package_id}")],
+        [InlineKeyboardButton(f"{status_icon} {status_text}", callback_data=f"admin_pkg_toggle_{package_id}")],
+        [InlineKeyboardButton("🗑️ حذف پکیج", callback_data=f"admin_pkg_delete_{package_id}")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_packages")]
+    ]
+    
+    await safe_edit_message(query, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def admin_package_toggle_status(query, package_id):
+    """تغییر وضعیت فعال/غیرفعال پکیج"""
+    pkg = get_package(package_id)
+    
+    if not pkg:
+        await query.answer("❌ پکیج یافت نشد", show_alert=True)
+        return
+    
+    new_status = not pkg['is_active']
+    
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute(
+            "UPDATE packages SET is_active = %s WHERE id = %s",
+            (new_status, package_id)
+        )
+        conn.commit()
+        
+        status_text = "فعال" if new_status else "غیرفعال"
+        await query.answer(f"✅ پکیج {status_text} شد", show_alert=False)
+        
+        log_admin_action(query.from_user.id, 'package_toggle', package_id, 
+                        f"تغییر وضعیت به {status_text}")
+        
+        await show_admin_package_detail(query, package_id)
+        
+    except Exception as e:
+        logger.error(f"خطا در تغییر وضعیت پکیج: {e}")
+        await query.answer("❌ خطا در تغییر وضعیت", show_alert=True)
+    finally:
+        cursor.close()
+        conn.close()
+
+async def admin_package_delete(query, package_id):
+    """حذف پکیج"""
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # بررسی اینکه آیا سفارشی با این پکیج وجود دارد
+        cursor.execute("SELECT COUNT(*) FROM orders WHERE package_id = %s", (package_id,))
+        order_count = cursor.fetchone()[0]
+        
+        if order_count > 0:
+            await query.answer(
+                f"❌ نمی‌توان این پکیج را حذف کرد!\n{order_count} سفارش با این پکیج ثبت شده است.",
+                show_alert=True
+            )
+            return
+        
+        cursor.execute("DELETE FROM packages WHERE id = %s", (package_id,))
+        conn.commit()
+        
+        await query.answer("✅ پکیج حذف شد", show_alert=False)
+        log_admin_action(query.from_user.id, 'package_delete', package_id, "حذف پکیج")
+        
+        await show_admin_packages_menu(query)
+        
+    except Exception as e:
+        logger.error(f"خطا در حذف پکیج: {e}")
+        await query.answer("❌ خطا در حذف پکیج", show_alert=True)
+    finally:
+        cursor.close()
+        conn.close()
+
+
 
 # ==================== ZarinPal ====================
 class ZarinPal:
@@ -1194,24 +1386,37 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ==================== BUY SERVICE ====================
     elif data == "buy_service":
-        active_packages = {k: v for k, v in PACKAGES.items() if v.get('active', True)}
-        
+        packages = get_all_packages(active_only=True)
+    
+        if not packages:
+            await query.answer("❌ در حال حاضر پکیجی موجود نیست", show_alert=True)
+            return
+    
+        text = "🛒 <b>خرید سرویس VPN</b>\n\n"
+        text += "یکی از پکیج‌های زیر را انتخاب کنید:\n\n"
+    
         keyboard = []
-        for pkg_id, pkg in active_packages.items():
-            keyboard.append([InlineKeyboardButton(
-                f"{pkg['name']} - {format_price(pkg['price'])}", 
-                callback_data=f"pkg_{pkg_id}"
-            )])
-        keyboard.append([InlineKeyboardButton("🏠 بازگشت", callback_data="back_to_main")])
+        for pkg in packages:
+            text += f"📦 <b>{pkg['name']}</b>\n"
+            text += f"   💰 قیمت: {format_price(pkg['price'])}\n"
+            text += f"   📅 مدت: {pkg['duration']} روز\n"
+            text += f"   📊 حجم: {format_bytes(pkg['traffic'])}\n\n"
         
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await safe_edit_message(query, "📦 لطفاً پکیج مورد نظر را انتخاب کنید:", reply_markup=reply_markup)
+            keyboard.append([InlineKeyboardButton(
+                f"خرید {pkg['name']}",
+                callback_data=f"select_package_{pkg['id']}"
+            )])
+    
+        keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_main")])
+    
+        await safe_edit_message(query, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
 
     elif data.startswith("pkg_"):
         pkg_id = data[4:]
-        pkg = PACKAGES.get(pkg_id)
+        pkg = get_package(pkg_id)
     
-        if not pkg or not pkg.get('active', True):
+        if not pkg or not pkg['is_active']:
             await query.answer("❌ این پکیج غیرفعال است", show_alert=True)
             return
     
@@ -1227,10 +1432,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = []
     
         if has_enough_balance:
-        # موجودی کافی است
             keyboard.append([InlineKeyboardButton("✅ خرید از کیف پول", callback_data=f"buy_wallet_{pkg_id}")])
         else:
-        # موجودی کافی نیست
             shortage = pkg['price'] - db_user['balance']
             text += f"⚠️ کمبود موجودی: {format_price(shortage)}\n\n"
             keyboard.append([InlineKeyboardButton("❌ موجودی کافی نیست", callback_data="insufficient_balance")])
@@ -1241,9 +1444,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
         await safe_edit_message(query, text, reply_markup=reply_markup, parse_mode='HTML')
 
+
     elif data.startswith("buy_wallet_"):
         pkg_id = data[11:]
-        pkg = PACKAGES.get(pkg_id)
+        pkg = get_package(pkg_id)
         
         if db_user['balance'] < pkg['price']:
             await query.answer("❌ موجودی کیف پول کافی نیست", show_alert=True)
@@ -1281,7 +1485,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("buy_online_"):
         pkg_id = data[11:]
-        pkg = PACKAGES.get(pkg_id)
+        pkg = get_package(pkg_id)
 
         if not pkg or not pkg.get('active', True):
             await query.answer("❌ این پکیج غیرفعال است", show_alert=True)
@@ -1383,7 +1587,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             if payment['payment_type'] == 'package':
                 pkg_id = payment['package_id']
-                pkg = PACKAGES.get(pkg_id)
+                pkg = get_package(pkg_id)
 
                 if pkg:
                     marzban_username = generate_username(user_id, update.effective_user.username, update.effective_user.first_name)
@@ -1466,7 +1670,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = []
             
             for order in active_orders[:10]:
-                pkg = PACKAGES.get(order['package_id'], {})
+                pkg = get_package(order['package_id']) or {}
                 text += f"🔹 {pkg.get('name', 'نامشخص')}\n"
                 text += f"   📅 انقضا: {format_date(order['expires_at'])}\n\n"
                 
@@ -1490,7 +1694,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # دریافت اطلاعات از Marzban
         usage = await marzban.get_user_usage(order['marzban_username'])
         
-        pkg = PACKAGES.get(order['package_id'], {})
+        pkg = get_package(order['package_id']) or {}
         text = f"📊 <b>جزئیات سرویس</b>\n\n"
         text += f"📦 پکیج: {pkg.get('name', 'نامشخص')}\n"
         text += f"👤 نام کاربری: <code>{order['marzban_username']}</code>\n"
@@ -1662,6 +1866,84 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "admin_settings":
         await show_admin_settings_menu(query)
+
+    # ==================== ADMIN PACKAGES MANAGEMENT ====================
+    elif data == "admin_packages":
+        await show_admin_packages_menu(query)
+
+    elif data.startswith("admin_package_view_"):
+        package_id = data.replace("admin_package_view_", "")
+        await show_admin_package_detail(query, package_id)
+
+    elif data.startswith("admin_pkg_toggle_"):
+        package_id = data.replace("admin_pkg_toggle_", "")
+        await admin_package_toggle_status(query, package_id)
+
+    elif data.startswith("admin_pkg_edit_price_"):
+        package_id = data.replace("admin_pkg_edit_price_", "")
+        context.user_data['state'] = WAITING_PACKAGE_PRICE
+        context.user_data['editing_package_id'] = package_id
+    
+        await query.message.edit_text(
+            "💰 قیمت جدید را به تومان وارد کنید:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 انصراف", callback_data=f"admin_package_view_{package_id}")
+            ]])
+        )
+
+    elif data.startswith("admin_pkg_edit_name_"):
+        package_id = data.replace("admin_pkg_edit_name_", "")
+        context.user_data['state'] = WAITING_PACKAGE_NAME
+        context.user_data['editing_package_id'] = package_id
+    
+        await query.message.edit_text(
+            "✏️ نام جدید پکیج را وارد کنید:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 انصراف", callback_data=f"admin_package_view_{package_id}")
+            ]])
+        )
+
+    elif data.startswith("admin_pkg_edit_duration_"):
+        package_id = data.replace("admin_pkg_edit_duration_", "")
+        context.user_data['state'] = WAITING_PACKAGE_DURATION
+        context.user_data['editing_package_id'] = package_id
+    
+        await query.message.edit_text(
+            "📅 مدت جدید را به روز وارد کنید:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 انصراف", callback_data=f"admin_package_view_{package_id}")
+            ]])
+        )
+
+    elif data.startswith("admin_pkg_edit_traffic_"):
+        package_id = data.replace("admin_pkg_edit_traffic_", "")
+        context.user_data['state'] = WAITING_PACKAGE_TRAFFIC
+        context.user_data['editing_package_id'] = package_id
+    
+        await query.message.edit_text(
+            "📊 حجم جدید را به گیگابایت وارد کنید:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 انصراف", callback_data=f"admin_package_view_{package_id}")
+            ]])
+        )
+
+    elif data.startswith("admin_pkg_delete_"):
+        package_id = data.replace("admin_pkg_delete_", "")
+    
+        keyboard = [
+            [InlineKeyboardButton("✅ بله، حذف شود", callback_data=f"admin_pkg_delete_confirm_{package_id}")],
+            [InlineKeyboardButton("❌ انصراف", callback_data=f"admin_package_view_{package_id}")]
+        ]
+    
+        await query.message.edit_text(
+            "⚠️ آیا مطمئن هستید؟\nحذف پکیج غیرقابل بازگشت است!",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    elif data.startswith("admin_pkg_delete_confirm_"):
+        package_id = data.replace("admin_pkg_delete_confirm_", "")
+        await admin_package_delete(query, package_id)
+
      
     elif data == "admin_services_active":
         await show_admin_services_list(query, status='active')
@@ -2607,6 +2889,7 @@ async def show_admin_panel(query, context):
         [InlineKeyboardButton("📊 داشبورد", callback_data="admin_dashboard")],
         [InlineKeyboardButton("👥 مدیریت کاربران", callback_data="admin_users"),
          InlineKeyboardButton("📦 مدیریت سرویس‌ها", callback_data="admin_services")],
+        [InlineKeyboardButton("🎁 مدیریت پکیج‌ها", callback_data="admin_packages")],
         [InlineKeyboardButton("💰 مدیریت مالی", callback_data="admin_financial"),
          InlineKeyboardButton("🎁 مدیریت رفرال", callback_data="admin_referral")],
         [InlineKeyboardButton("📢 ارسال پیام همگانی", callback_data="admin_broadcast")],
@@ -2710,7 +2993,7 @@ async def show_admin_services_list(query, status='active', page=0):
         user_name = order.get('first_name', 'ناشناس')
         
         # دریافت نام پکیج از package_id
-        pkg = PACKAGES.get(order.get('package_id', ''), {})
+        pkg = get_package(order.get('package_id'))
         package_name = pkg.get('name', 'نامشخص')
         
         # محاسبه روزهای باقی‌مانده
@@ -2775,8 +3058,11 @@ async def show_admin_service_detail(query, order_id, context):
         return
     
     # دریافت نام پکیج
-    pkg = PACKAGES.get(order.get('package_id', ''), {})
-    package_name = pkg.get('name', 'نا مشخص')
+    # دریافت نام پکیج از دیتابیس
+    package_id = order.get('package_id')
+    pkg = get_package(package_id) if package_id else None
+    package_name = pkg['name'] if pkg else 'نامشخص'
+
     
     # دریافت اطلاعات از مرزبان
     marzban_username = order.get('marzban_username')
@@ -2896,7 +3182,7 @@ async def show_admin_services_stats(query):
     top_packages = []
     
     for pkg_id, count in package_counter.most_common(3):
-        pkg = PACKAGES.get(pkg_id, {})
+        pkg = get_package(order.get('package_id'))
         pkg_name = pkg.get('name', pkg_id)
         top_packages.append((pkg_name, count))
     
@@ -3235,8 +3521,10 @@ async def process_add_traffic(query, order_id, gb_amount, context):
     
     if success:
         # دریافت نام پکیج
-        pkg = PACKAGES.get(order.get('package_id', ''), {})
-        package_name = pkg.get('name', 'نامشخص')
+        package_id = order.get('package_id')
+        pkg = get_package(package_id) if package_id else None
+        package_name = pkg['name'] if pkg else 'نامشخص'
+
         
         await query.message.edit_text(
             f"✅ <b>حجم اضافه شد!</b>\n\n"
@@ -3421,8 +3709,10 @@ async def process_extend_service(query, order_id, days, context):
                     )
                     conn.commit()
 
-                    pkg = PACKAGES.get(order.get('package_id', ''), {})
-                    package_name = pkg.get('name', 'نامشخص')
+                    package_id = order.get('package_id')
+                    pkg = get_package(package_id) if package_id else None
+                    package_name = pkg['name'] if pkg else 'نامشخص'
+
 
                     await query.message.edit_text(
                         f"✅ <b>سرویس تمدید شد!</b>\n\n"
@@ -3504,8 +3794,10 @@ async def process_disable_service(query, order_id, context):
         return
     
     # دریافت نام پکیج
-    pkg = PACKAGES.get(order.get('package_id', ''), {})
-    package_name = pkg.get('name', 'نامشخص')
+    package_id = order.get('package_id')
+    pkg = get_package(package_id) if package_id else None
+    package_name = pkg['name'] if pkg else 'نامشخص'
+
     
     # بررسی توکن مرزبان
     if not marzban.token:
@@ -3625,8 +3917,10 @@ async def process_delete_service_admin(query, order_id, context):
     success = await marzban.delete_user(marzban_username)
     
     # دریافت نام پکیج
-    pkg = PACKAGES.get(order.get('package_id', ''), {})
-    package_name = pkg.get('name', 'نامشخص')
+    package_id = order.get('package_id')
+    pkg = get_package(package_id) if package_id else None
+    package_name = pkg['name'] if pkg else 'نامشخص'
+
     
     if success:
         update_order_status(order_id, 'deleted')
@@ -5452,6 +5746,103 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+    # ==================== PACKAGE MANAGEMENT TEXT HANDLERS ====================
+    elif state == WAITING_PACKAGE_PRICE:
+        try:
+            new_price = int(update.message.text.replace(',', '')) 
+        
+            if new_price <= 0:
+                raise ValueError
+        
+            package_id = context.user_data.get('editing_package_id')
+        
+            if update_package(package_id, price=new_price):
+                await update.message.reply_text(
+                    f"✅ قیمت پکیج به {format_price(new_price)} تغییر یافت",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🔙 بازگشت", callback_data=f"admin_package_view_{package_id}")
+                    ]])
+                )
+                log_admin_action(user_id, 'package_edit', package_id, f"تغییر قیمت به {new_price}")
+            else:
+                await update.message.reply_text("❌ خطا در ذخیره‌سازی")
+        
+            context.user_data.pop('state', None)
+            context.user_data.pop('editing_package_id', None)
+        
+        except ValueError:
+            await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید")
+
+    elif state == WAITING_PACKAGE_NAME:
+        new_name = update.message.text.strip()
+        package_id = context.user_data.get('editing_package_id')
+    
+        if update_package(package_id, name=new_name):
+            await update.message.reply_text(
+                f"✅ نام پکیج به '{new_name}' تغییر یافت",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 بازگشت", callback_data=f"admin_package_view_{package_id}")
+                ]])
+            )
+            log_admin_action(user_id, 'package_edit', package_id, f"تغییر نام به {new_name}")
+        else:
+            await update.message.reply_text("❌ خطا در ذخیره‌سازی")
+    
+        context.user_data.pop('state', None)
+        context.user_data.pop('editing_package_id', None)
+
+    elif state == WAITING_PACKAGE_DURATION:
+        try:
+            new_duration = int(update.message.text)
+            if new_duration <= 0:
+                raise ValueError
+        
+            package_id = context.user_data.get('editing_package_id')
+        
+            if update_package(package_id, duration=new_duration):
+                await update.message.reply_text(
+                    f"✅ مدت پکیج به {new_duration} روز تغییر یافت",
+                    reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 بازگشت", callback_data=f"admin_package_view_{package_id}")
+                    ]])
+                )
+                log_admin_action(user_id, 'package_edit', package_id, f"تغییر مدت به {new_duration}")
+            else:
+                await update.message.reply_text("❌ خطا در ذخیره‌سازی")
+        
+            context.user_data.pop('state', None)
+            context.user_data.pop('editing_package_id', None)
+        
+        except ValueError:
+            await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید")
+
+    elif state == WAITING_PACKAGE_TRAFFIC:
+        try:
+            traffic_gb = float(update.message.text)
+            if traffic_gb <= 0:
+                raise ValueError
+        
+            traffic_bytes = int(traffic_gb * 1024 * 1024 * 1024)
+            package_id = context.user_data.get('editing_package_id')
+        
+            if update_package(package_id, traffic=traffic_bytes):
+                await update.message.reply_text(
+                    f"✅ حجم پکیج به {traffic_gb} گیگابایت تغییر یافت",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🔙 بازگشت", callback_data=f"admin_package_view_{package_id}")
+                    ]])
+                )
+                log_admin_action(user_id, 'package_edit', package_id, f"تغییر حجم به {traffic_gb}GB")
+            else:
+                await update.message.reply_text("❌ خطا در ذخیره‌سازی")
+        
+            context.user_data.pop('state', None)
+            context.user_data.pop('editing_package_id', None)
+        
+        except ValueError:
+            await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید (مثال: 30)")
+
+
 # ==================== ZARINPAL CALLBACK WEBSERVER ====================
 
 async def zarinpal_callback(request):
@@ -5583,7 +5974,8 @@ async def create_service_for_payment(user_id, payment, ref_id):
     """✅ ساخت سرویس با return موفقیت"""
     try:
         pkg_id = payment['package_id']
-        pkg = PACKAGES.get(pkg_id)
+        pkg = get_package(pkg_id)  # ✅ از دیتابیس
+        
         
         if not pkg:
             logger.error(f"❌ Package not found: {pkg_id}")
